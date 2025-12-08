@@ -1,0 +1,10 @@
+
+backups_envios
+build
+_pycache_
+dist
+logs_envios
+venv
+errores.log
+
+

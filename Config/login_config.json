@@ -1,0 +1,7 @@
+{
+    "contraseña_maestra": "$pbkdf2-sha256$29000$RugdY4zx3jvHWKs1Rijl/A$KPdBsuzo/VuGH7VzL9mr1Vk4OG9KNAf0Zq3Yq8v7gN0",
+    "usuarios": {
+        "admin": "$pbkdf2-sha256$29000$9J5zTul9rzVGKOW8d45xjg$k9DQzV0l.lUfBCVZws8IlvvGLGP14HnHZql7S.npuXc",
+        "supervisor": "$pbkdf2-sha256$29000$AbCdEfGhIjKlMnOpQrStUv$XyZ0123456789ABCDEFGHIJKL"
+    }
+}

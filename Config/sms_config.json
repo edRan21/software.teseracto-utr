@@ -1,0 +1,11 @@
+{
+    "use_sms": false,
+    "provider": "instasent",
+    "instasent_host": "smpp.instasent.com",
+    "instasent_port": 2775,
+    "instasent_username": "",
+    "instasent_password": "",
+    "instasent_sender_id": "TESSERACT",
+    "numero_destino": "",
+    "api_token": ""
+}

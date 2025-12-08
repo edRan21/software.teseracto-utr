@@ -1,0 +1,286 @@
+{
+  "schema_version": "1.5",
+  "sensores": [
+    {
+      "modelo": "Badger ModMAG® M2000",
+      "puerto_serie": "COM3",
+      "baudrate": 9600,
+      "slave_id": 1,
+      "parity": "N",
+      "stopbits": 1,
+      "bytesize": 8,
+      "timeout": 5.0,
+      "endianness": "big",
+      "word_order": "big",
+      "funcion_default": 4,
+      "tipo_medidor": "Badger M2000",
+      "registros": {
+        "unidad_flujo": {
+          "address": 131,
+          "count": 1,
+          "data_type": "int16",
+          "no_escalar": true,
+          "funcion": 4,
+          "descripcion": "Unidad de flujo configurada en el medidor"
+        },
+        "flujo_instantaneo": {
+          "address": 241,
+          "count": 2,
+          "data_type": "float32",
+          "unidad_medidor": "user_units",
+          "escala": 1.0,
+          "funcion": 4,
+          "widget_ui": {
+            "tipo": "GAUGE_LARGE",
+            "posicion": [0, 0],
+            "rango": [0, 10],
+            "decimales": 3,
+            "color_alerta": "#FF0000"
+          }
+        },
+        "flujo_acumulado": {
+          "address": 211,
+          "count": 2,
+          "data_type": "float32",
+          "unidad_medidor": "user_units",
+          "escala": 1.0,
+          "funcion": 4,
+          "widget_ui": {
+            "tipo": "GAUGE_LARGE",
+            "posicion": [0, 1],
+            "rango": [0, 10000],
+            "decimales": 1,
+            "color_normal": "#00FF00"
+          }
+        },
+        "velocidad_flujo": {
+          "address": 233,
+          "count": 2,
+          "data_type": "float32",
+          "unidad_medidor": "m/s",
+          "escala": 1.0,
+          "funcion": 4,
+          "descripcion": "Velocidad del flujo en metros por segundo",
+          "widget_ui": {
+            "tipo": "GAUGE_LARGE",
+            "posicion": [0, 2],
+            "rango": [0, 5],
+            "decimales": 3,
+            "color_normal": "#e1bee7"
+          }
+        },
+        "direccion_flujo": {
+          "address": 301,
+          "count": 1,
+          "data_type": "int16",
+          "funcion": 4,
+          "widget_ui": {
+            "tipo": "LED_INDICATOR",
+            "posicion": [1, 0],
+            "on_value": 1,
+            "off_value": 0,
+            "etiqueta": "Flujo positivo"
+          }
+        },
+        "contador_energizacion": {
+          "address": 245,
+          "count": 1,
+          "data_type": "int16",
+          "funcion": 4,
+          "descripcion": "Contador de encendidos"
+        },
+        "errores_sensor": {
+          "address": 262,
+          "count": 1,
+          "data_type": "bitmask",
+          "bit_map": {
+            "0": "sensor_fault",
+            "1": "over_range",
+            "2": "empty_pipe"
+          },
+          "funcion": 4
+        },
+        "codigo_error": {
+          "address": 257,
+          "count": 1,
+          "data_type": "int16",
+          "funcion": 4,
+          "descripcion": "Código de error del sistema"
+        }
+      },
+      "output_mapping": {
+        "flujo_instantaneo": "flujo_instantaneo",
+        "flujo_acumulado": "flujo_acumulado",
+        "flags": "direccion_flujo"
+      }
+    },
+    {
+      "modelo": "ISOMAG MV110/MV210",
+      "puerto_serie": "COM3", 
+      "baudrate": 9600,
+      "slave_id": 1,
+      "parity": "N",
+      "stopbits": 1,
+      "bytesize": 8,
+      "timeout": 5.0,
+      "endianness": "big",
+      "word_order": "big",
+      "funcion_default": 4,
+      "tipo_medidor": "ISOMAG",
+      "registros": {
+        "flujo_instantaneo": {
+          "address": 4,
+          "count": 2,
+          "data_type": "float32",
+          "escala": 1.0,
+          "funcion": 4,
+          "descripcion": "Flow rate value in the unit of measure chosen"
+        },
+        "flujo_acumulado": {
+          "address": 8,
+          "count": 2,
+          "data_type": "uint32", 
+          "escala": 1.0,
+          "funcion": 4,
+          "descripcion": "Totalizer T+ value"
+        },
+        "velocidad_flujo": {
+          "address": 6,
+          "count": 2,
+          "data_type": "float32",
+          "escala": 1.0,
+          "funcion": 4,
+          "descripcion": "Flow speed in the unit of measure chosen"
+        },
+        "unidad_flujo": {
+          "address": 37,
+          "count": 1,
+          "data_type": "int16",
+          "no_escalar": true,
+          "funcion": 4,
+          "descripcion": "Flow rate unit and decimals"
+        },
+        "flags_proceso": {
+          "address": 20,
+          "count": 1,
+          "data_type": "isomag_flags",
+          "funcion": 4,
+          "descripcion": "Process flags 1 and 2"
+        },
+        "contador_energizacion": {
+          "address": 27,
+          "count": 1,
+          "data_type": "int16",
+          "funcion": 4,
+          "descripcion": "Residual battery capacity in percentage"
+        },
+        "codigo_error": {
+          "address": 32,
+          "count": 2,
+          "data_type": "uint32",
+          "funcion": 4,
+          "descripcion": "Latest sensor test result code"
+        }
+      },
+      "output_mapping": {
+        "flujo_instantaneo": "flujo_instantaneo",
+        "flujo_acumulado": "flujo_acumulado", 
+        "velocidad_flujo": "velocidad_flujo",
+        "flags_proceso": "flags_proceso"
+      }
+    }
+  ],
+  "perfiles_predefinidos": [
+    {
+      "nombre": "Badger M2000 - Básico",
+      "modelo": "Badger ModMAG® M2000",
+      "tipo_medidor": "Badger M2000",
+      "registros_habilitados": [
+        "unidad_flujo",
+        "flujo_instantaneo",
+        "flujo_acumulado"
+      ],
+      "widget_layout": "BASIC"
+    },
+    {
+      "nombre": "Badger M2000 - Básico sin Opcionales",
+      "modelo": "Badger ModMAG® M2000",
+      "tipo_medidor": "Badger M2000",
+      "registros_habilitados": [
+        "unidad_flujo",
+        "flujo_instantaneo",
+        "flujo_acumulado",
+        "direccion_flujo"
+      ],
+      "widget_layout": "BASIC"
+    },
+    {
+      "nombre": "Badger M2000 - Completo",
+      "modelo": "Badger ModMAG® M2000",
+      "tipo_medidor": "Badger M2000",
+      "registros_habilitados": [
+        "unidad_flujo",
+        "flujo_instantaneo",
+        "flujo_acumulado",
+        "velocidad_flujo",
+        "direccion_flujo",
+        "contador_energizacion",
+        "errores_sensor",
+        "codigo_error"
+      ],
+      "widget_layout": "FULL"
+    },
+    {
+      "nombre": "ISOMAG - Básico",
+      "modelo": "ISOMAG MV110/MV210", 
+      "tipo_medidor": "ISOMAG",
+      "registros_habilitados": [
+        "flujo_instantaneo",
+        "flujo_acumulado",
+        "velocidad_flujo"
+      ],
+      "widget_layout": "BASIC"
+    },
+    {
+      "nombre": "ISOMAG - Completo",
+      "modelo": "ISOMAG MV110/MV210",
+      "tipo_medidor": "ISOMAG", 
+      "registros_habilitados": [
+        "flujo_instantaneo",
+        "flujo_acumulado", 
+        "velocidad_flujo",
+        "unidad_flujo",
+        "flags_proceso",
+        "contador_energizacion",
+        "codigo_error"
+      ],
+      "widget_layout": "FULL"
+    }
+  ],
+  "config_defaults": {
+    "baudrate": 9600,
+    "parity": "N",
+    "stopbits": 1,
+    "bytesize": 8,
+    "timeout": 5.0,
+    "endianness": "big",
+    "word_order": "big",
+    "funcion_default": 4,
+    "unidad_flujo_default": "m³/h"
+  },
+  "mapeo_unidades": {
+    "0": "L/s",
+    "1": "L/min",
+    "2": "L/h",
+    "3": "m³/s",
+    "4": "m³/min",
+    "5": "m³/h",
+    "6": "ft³/s",
+    "7": "ft³/min",
+    "8": "ft³/h",
+    "9": "gal/s",
+    "10": "GPM",
+    "11": "gal/h",
+    "12": "MGD"
+  }
+}

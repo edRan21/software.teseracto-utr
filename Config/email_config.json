@@ -1,0 +1,12 @@
+{
+    "smtp_server": "smtp.gmail.com",
+    "smtp_port": 587,
+    "from": "teseractohgf@gmail.com",
+    "to": [
+        "ahuertajesus@gmail.com",
+        "leohuer456@gmail.com"
+    ],
+    "subject": "Reporte en desarrollo VSCode Tesseract",
+    "username": "teseractohgf@gmail.com",
+    "password": "wsis imsg gsve tyzi"
+}

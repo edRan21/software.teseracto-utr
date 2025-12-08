@@ -1,0 +1,12 @@
+{
+    "RFC": "HUJL0108026H5",
+    "NSM": "TESTISOMAG-018",
+    "NSUE": "TEST-018",
+    "NSUT": "TSRA-000",
+    "Lat": 19.01714246158,
+    "Long": -98.2583521089,
+    "unidad_visualizacion": "L/s",
+    "storage_path": "C:\\Users\\leohu\\OneDrive\\Desktop\\codigo del servidor",
+    "hora_reporte": "13:40",
+    "report_type": "SistemaMedicion"
+}
