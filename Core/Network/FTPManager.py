@@ -335,7 +335,7 @@ class FTPManager(IFileTransfer):
                 return False
             
             # Conexión FTP simple
-            temp_ftp = ftplib.FTP(timeout=10)
+            temp_ftp = ftplib.FTP(timeout=15)
             temp_ftp.connect(self.host, self.port)
             temp_ftp.login(self.username, self.password)
             

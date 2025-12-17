@@ -332,12 +332,22 @@ class MedidorAguaBase(IMedidorAgua):
             
             # Mapear errores del sensor desde flags2
             errores_sensor = {}
+            
+            # CORRECCIÓN: Registrar errores del ISOMAG durante el postprocesamiento
             if flags.get("pipe_empty"):
                 errores_sensor["empty_pipe"] = True
+                self.error_handler.log_error("120", "ISOMAG - Tubería vacía detectada", es_error_sistema=False)
+            
             if flags.get("flow_rate_overflow"):
                 errores_sensor["over_range"] = True
+                self.error_handler.log_error("127", "ISOMAG - Desbordamiento de flujo", es_error_sistema=False)
+            
             if flags.get("coils_excitation_error") or flags.get("input_signal_error"):
                 errores_sensor["sensor_fault"] = True
+                if flags.get("coils_excitation_error"):
+                    self.error_handler.log_error("121", "ISOMAG - Error de excitación de bobinas", es_error_sistema=False)
+                if flags.get("input_signal_error"):
+                    self.error_handler.log_error("122", "ISOMAG - Error de señal de entrada", es_error_sistema=False)
             
             resultados["errores_sensor"] = errores_sensor if errores_sensor else {
                 "sensor_fault": False,
@@ -395,21 +405,33 @@ class MedidorAguaBase(IMedidorAgua):
 
     def leer_estado_medidor(self) -> Dict[str, Any]:
         """
-        Lee el estado del medidor (registro crítico 0x0106 para Badger)
-        Devuelve diccionario con estado
+        Lee el estado del medidor.
+        Para Badger: registro 0x0106
+        Para ISOMAG: registro 0020 (Process Flags)
         """
         with self._connection_lock:
             if not self.client.connected and not self.conectar():
                 return {}
 
             try:
-                # Para ISOMAG, leer registro de flags de proceso (0020) como estado
-                if self.perfil.get("tipo_medidor") == "ISOMAG":
+                tipo_medidor = self.perfil.get("tipo_medidor", "Desconocido")
+                
+                if tipo_medidor == "ISOMAG":
+                    # Para ISOMAG, leer registro de flags de proceso (0020)
                     response = self.client.read_input_registers(
                         address=20,  # Registro 0020 para flags de proceso ISOMAG
                         count=1,
                         slave=self.perfil["slave_id"]
                     )
+                    
+                    if response.isError():
+                        return {}
+                    
+                    meter_status = response.registers[0]
+                    
+                    # CORRECCIÓN: Pasar el tipo de medidor a log_meter_error
+                    self.error_handler.log_meter_error(meter_status, tipo_medidor="ISOMAG")
+                    
                 else:
                     # Para Badger M2000, leer registro de estado estándar
                     response = self.client.read_input_registers(
@@ -417,17 +439,23 @@ class MedidorAguaBase(IMedidorAgua):
                         count=1,
                         slave=self.perfil["slave_id"]
                     )
-
-                if response.isError():
-                    return {}
+                    
+                    if response.isError():
+                        return {}
+                    
+                    meter_status = response.registers[0]
+                    
+                    # CORRECCIÓN: Pasar el tipo de medidor a log_meter_error
+                    self.error_handler.log_meter_error(meter_status, tipo_medidor="Badger M2000")
 
                 return {
-                    'meter_status': response.registers[0],
+                    'meter_status': meter_status,
                     'timestamp': time.time()
                 }
                 
             except Exception as e:
-                self.error_handler.log_error("007", f"Error leyendo estado medidor: {str(e)}")
+                # Este es un error del SISTEMA (comunicación)
+                self.error_handler.log_error("007", f"Error leyendo estado medidor: {str(e)}", es_error_sistema=True)
                 return {}
 
     def obtener_unidad_flujo(self) -> str:

@@ -690,7 +690,7 @@ class FTPEmailConfigWindow(QWidget):
                 "clave": self.txt_clave.text(),
                 "ruta_remota": self.txt_ruta_remota.text().strip(),
                 "hora_envio": hora_str,
-                "timeout": 30,
+                "timeout": 60,
                 "secure": False,
                 "puerto": 21
             }

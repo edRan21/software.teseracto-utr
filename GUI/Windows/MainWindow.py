@@ -198,9 +198,25 @@ class MainWindow(FramelessWindow):
         self.sms_window.show()
 
     def show_ftp_conagua(self):
-        """Mostrar ventana de FTP CONAGUA"""
-        self.ftp_conagua_window = FTPConaguaWindow(self.error_handler)
-        self.ftp_conagua_window.show()
+        """Mostrar ventana de FTP CONAGUA con manejo mejorado"""
+        try:
+            self.ftp_conagua_window = FTPConaguaWindow(self.error_handler)
+            
+            # ✅ CORREGIDO: Usar show_warning en lugar de mostrar_estado
+            self.ftp_conagua_window.window_closed.connect(
+                lambda: self.show_warning("Ventana FTP Conagua cerrada")
+            )
+            
+            # Verificar si la ventana se inicializó correctamente
+            if hasattr(self.ftp_conagua_window, '_initialized') and self.ftp_conagua_window._initialized:
+                self.ftp_conagua_window.show()
+            else:
+                # La ventana no se pudo inicializar (probablemente canceló autenticación)
+                self.ftp_conagua_window.deleteLater()
+                
+        except Exception as e:
+            print(f"Error al abrir ventana FTP Conagua: {e}")
+            self.show_warning(f"No se pudo abrir la ventana: {str(e)}")
     
     def show_ftp_email_config(self):
         """Muestra la ventana de configuración FTP/Email"""
