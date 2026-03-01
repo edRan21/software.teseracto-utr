@@ -1,7 +1,7 @@
 {
     "FTPConaguaWindow": {
-        "nip_teseracto": "$pbkdf2-sha256$29000$VkoJobR2jvFey9mbcw4BoA$PL6ActATlOYMgh2iLZVSqN.LFZwcYMSV5VsaGKamyvE",
-        "nip_generico": "$pbkdf2-sha256$29000$ZowRIuS8976XktI6p5Ry7g$cFVDahZpoJb7MFSBgZOo6rCgtsGupkEklgVsV/rEvkk",
+        "nip_teseracto": "",
+        "nip_generico": "",
         "nip_unidad_inspeccion": null
     }
 }

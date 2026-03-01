@@ -231,6 +231,44 @@ class ConfigManager:
         cls._guardar_archivo(config_path, config)
         cls._cache.pop('sms', None)
 
+
+    @classmethod
+    def guardar_config_email(cls, config: Dict[str, Any]) -> None:
+        """Guarda configuración de email en email_config.json"""
+        # Validar campos requeridos
+        campos_requeridos = ["smtp_server", "smtp_port", "from", "to"]
+        for campo in campos_requeridos:
+            if campo not in config:
+                raise ValueError(f"Falta '{campo}' en la configuración de email")
+        
+        config_path = path_manager.get_config_path("email_config.json")
+        cls._guardar_archivo(config_path, config)
+        cls._cache.pop('email', None)
+
+    @classmethod
+    def cargar_config_email(cls) -> Dict[str, Any]:
+        """Carga configuración de email desde email_config.json"""
+        if 'email' in cls._cache:
+            return cls._cache['email']
+        
+        config_path = path_manager.get_config_path("email_config.json")
+        cfg = cls._cargar_archivo(config_path)
+        
+        if not cfg:
+            logger.warning("Archivo email_config.json no encontrado, usando valores por defecto")
+            return {
+                "smtp_server": "",
+                "smtp_port": 587,
+                "from": "",
+                "to": [],
+                "subject": "Reporte Tesseract UTR",
+                "username": "",
+                "password": ""
+            }
+        
+        cls._cache['email'] = cfg
+        return cfg
+
     @classmethod
     def cargar_config_login(cls) -> Dict[str, Any]:
         if 'login' in cls._cache:

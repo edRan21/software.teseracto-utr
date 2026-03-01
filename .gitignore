@@ -4,7 +4,6 @@ build
 __pycache__
 dist
 logs_envios
-venv
 errores.log
 
 

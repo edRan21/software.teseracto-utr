@@ -1,9 +1,9 @@
 {
     "host": "medidores.conagua.gob.mx",
-    "usuario": "uv020",
-    "clave": "1%m2KQN*aj7P",
-    "ruta_remota": "/MVAN/UV020/",
-    "hora_envio": "14:00",
+    "usuario": "prueba18",
+    "clave": "Pr3st4D0reS18#",
+    "ruta_remota": "/Prueba",
+    "hora_envio": "02:08",
     "timeout": 60,
     "secure": false,
     "puerto": 21

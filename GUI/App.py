@@ -68,9 +68,11 @@ class TesseractApp(QApplication):
     def init_scheduler(self):
         from Core.Network.FTPManager import FTPManager
         from Core.System.FileScheduler import FileScheduler
+        from Core.System.ConfigManager import ConfigManager  # ✅ ASEGURAR IMPORT
         
-        # Cargar configuración FTP
+        # ✅ CARGAR CONFIGURACIÓN USANDO ConfigManager
         ftp_config = ConfigManager.cargar_config_ftp()
+        email_config = ConfigManager.cargar_config_email()  # ✅ NUEVO
         
         # Configuración por defecto si no existe
         if not ftp_config:
@@ -80,8 +82,8 @@ class TesseractApp(QApplication):
                 "clave": "",
                 "ruta_remota": "/",
                 "hora_envio": "23:59",
-                "timeout": 30,
-                "secure": False,  # IMPORTANTE: False para CONAGUA
+                "timeout": 60,
+                "secure": False,
                 "puerto": 21
             }
         
@@ -112,11 +114,15 @@ class TesseractApp(QApplication):
             error_handler=self.error_handler
         )
         
+        # ✅ INYECTAR CONFIGURACIÓN EMAIL EN FileScheduler
+        if hasattr(self.file_scheduler, 'email_config'):
+            self.file_scheduler.email_config = email_config
+        
         # Iniciar si está habilitado
         if sched_config.get("enabled", True):
             try:
                 self.file_scheduler.iniciar()
-                logging.info("✅ Scheduler iniciado")
+                logging.info("✅ Scheduler iniciado con configuración FTP/Email")
             except Exception as e:
                 self.error_handler.log_error("SCHED-INIT", f"Error: {e}")
                 logging.error(f"❌ Error iniciando scheduler: {e}")
