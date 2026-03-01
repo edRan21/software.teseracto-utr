@@ -65,7 +65,35 @@ class FileScheduler:
         except Exception as e:
             self.error_handler.log_error("EMAIL-CONFIG", f"Error: {e}")
             return None
-    
+
+    def _actualizar_config_email(self, nueva_config: Dict[str, Any]):
+        """Actualiza configuración de email en tiempo de ejecución"""
+        self.email_config = nueva_config
+        self.logger.info("✅ Configuración de email actualizada en tiempo de ejecución")
+
+    def actualizar_configuracion_completa(self, ftp_config: Dict[str, Any], email_config: Optional[Dict[str, Any]] = None):
+        """Actualiza toda la configuración del scheduler"""
+        with self._lock:
+            # 1. Actualizar FTPManager
+            if hasattr(self.transfer_service, 'actualizar_configuracion'):
+                self.transfer_service.actualizar_configuracion(ftp_config)
+            
+            # 2. Actualizar configuración interna
+            self.config["hora_envio"] = ftp_config.get("hora_envio", self.config.get("hora_envio", "23:59"))
+            self.config["ruta_remota"] = ftp_config.get("ruta_remota", self.config.get("ruta_remota", "/"))
+            
+            # 3. Actualizar email si se proporciona
+            if email_config:
+                self.email_config = email_config
+            
+            # 4. Reiniciar scheduler si está en ejecución
+            if self._is_running:
+                self.detener()
+                time.sleep(1)
+                self.iniciar()
+            
+            self.logger.info("✅ Configuración completa del scheduler actualizada")
+
     def _verificar_estructura_directorios(self):
         """Verifica estructura de directorios"""
         try:

@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 class ConfigManager:
     _cache = {}
+    
+    # ✅ CONSTANTES PARA NIPs POR DEFECTO
+    NIP_TESERACTO_DEFAULT = "1974"
+    NIP_GENERICO_DEFAULT = "1111"
 
     @staticmethod
     def _validar_unidad(unidad: str):
@@ -70,6 +74,88 @@ class ConfigManager:
             return len(ruta) > 1 and ruta[1] == ":" and ruta[0].upper() in string.ascii_uppercase
         except:
             return False
+
+    # ✅ NUEVO: MÉTODOS PARA GESTIÓN DE NIPs DE VENTANAS
+    @classmethod
+    def cargar_nips_ventanas(cls) -> Dict[str, Any]:
+        """Carga la configuración de NIPs para ventanas bloqueadas"""
+        if 'nips_ventanas' in cls._cache:
+            return cls._cache['nips_ventanas']
+            
+        config_path = path_manager.get_config_path("nip_config.json")
+        nips = cls._cargar_archivo(config_path)
+        
+        if not nips:
+            logger.warning("Archivo nip_config.json no encontrado, creando configuración inicial")
+            nips = {
+                "FTPConaguaWindow": {
+                    "nip_teseracto": pbkdf2_sha256.hash(cls.NIP_TESERACTO_DEFAULT, salt_size=16),
+                    "nip_generico": pbkdf2_sha256.hash(cls.NIP_GENERICO_DEFAULT, salt_size=16),
+                    "nip_unidad_inspeccion": None  # Se configurará posteriormente
+                }
+            }
+            cls._guardar_archivo(config_path, nips)
+        
+        cls._cache['nips_ventanas'] = nips
+        return nips
+
+    @classmethod
+    def guardar_nips_ventanas(cls, nips: Dict[str, Any]) -> None:
+        """Guarda la configuración de NIPs para ventanas bloqueadas"""
+        config_path = path_manager.get_config_path("nip_config.json")
+        cls._guardar_archivo(config_path, nips)
+        cls._cache.pop('nips_ventanas', None)
+
+    @classmethod
+    def obtener_nip_ventana(cls, ventana: str, tipo_nip: str) -> Optional[str]:
+        """Obtiene el NIP (hasheado) de una ventana específica"""
+        nips = cls.cargar_nips_ventanas()
+        ventana_nips = nips.get(ventana, {})
+        return ventana_nips.get(tipo_nip)
+
+    @classmethod
+    def guardar_nip_ventana(cls, ventana: str, tipo_nip: str, nip: str) -> None:
+        """Guarda un NIP para una ventana específica (lo hashea automáticamente)"""
+        nips = cls.cargar_nips_ventanas()
+        
+        if ventana not in nips:
+            nips[ventana] = {}
+        
+        # Hashear el NIP antes de guardarlo
+        hashed_nip = pbkdf2_sha256.hash(nip, salt_size=16)
+        nips[ventana][tipo_nip] = hashed_nip
+        
+        cls.guardar_nips_ventanas(nips)
+        cls._cache.pop('nips_ventanas', None)
+
+    @classmethod
+    def validar_nip_ventana(cls, ventana: str, tipo_nip: str, nip_ingresado: str) -> bool:
+        """Valida si el NIP ingresado es correcto para una ventana específica"""
+        nip_almacenado = cls.obtener_nip_ventana(ventana, tipo_nip)
+        
+        if not nip_almacenado:
+            # Si no hay NIP almacenado, validar contra valores por defecto
+            if tipo_nip == "nip_teseracto":
+                return nip_ingresado == cls.NIP_TESERACTO_DEFAULT
+            elif tipo_nip == "nip_generico":
+                return nip_ingresado == cls.NIP_GENERICO_DEFAULT
+            return False
+        
+        # Validar usando hash
+        return pbkdf2_sha256.verify(nip_ingresado, nip_almacenado)
+
+    @classmethod
+    def existe_nip_unidad_inspeccion(cls, ventana: str) -> bool:
+        """Verifica si ya existe un NIP de unidad de inspección configurado"""
+        nips = cls.cargar_nips_ventanas()
+        ventana_nips = nips.get(ventana, {})
+        return ventana_nips.get("nip_unidad_inspeccion") is not None
+
+    @classmethod
+    def cambiar_nip_teseracto(cls, nuevo_nip: str) -> None:
+        """Permite cambiar el NIP Teseracto (solo para administradores)"""
+        cls.guardar_nip_ventana("FTPConaguaWindow", "nip_teseracto", nuevo_nip)
+        logger.info("NIP Teseracto actualizado correctamente")
 
     @classmethod
     def cargar_config_ftp(cls) -> Dict[str, Any]:
@@ -144,6 +230,44 @@ class ConfigManager:
         config_path = path_manager.get_config_path("sms_config.json")
         cls._guardar_archivo(config_path, config)
         cls._cache.pop('sms', None)
+
+
+    @classmethod
+    def guardar_config_email(cls, config: Dict[str, Any]) -> None:
+        """Guarda configuración de email en email_config.json"""
+        # Validar campos requeridos
+        campos_requeridos = ["smtp_server", "smtp_port", "from", "to"]
+        for campo in campos_requeridos:
+            if campo not in config:
+                raise ValueError(f"Falta '{campo}' en la configuración de email")
+        
+        config_path = path_manager.get_config_path("email_config.json")
+        cls._guardar_archivo(config_path, config)
+        cls._cache.pop('email', None)
+
+    @classmethod
+    def cargar_config_email(cls) -> Dict[str, Any]:
+        """Carga configuración de email desde email_config.json"""
+        if 'email' in cls._cache:
+            return cls._cache['email']
+        
+        config_path = path_manager.get_config_path("email_config.json")
+        cfg = cls._cargar_archivo(config_path)
+        
+        if not cfg:
+            logger.warning("Archivo email_config.json no encontrado, usando valores por defecto")
+            return {
+                "smtp_server": "",
+                "smtp_port": 587,
+                "from": "",
+                "to": [],
+                "subject": "Reporte Tesseract UTR",
+                "username": "",
+                "password": ""
+            }
+        
+        cls._cache['email'] = cfg
+        return cfg
 
     @classmethod
     def cargar_config_login(cls) -> Dict[str, Any]:

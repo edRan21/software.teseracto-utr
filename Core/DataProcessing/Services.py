@@ -76,9 +76,9 @@ class FileNameGenerator(IFileNameGenerator):
         try:
             config = self.config_provider.get_config()
             if tipo_registro == "Medidor":
-                return f"{config['RFC']}_{config['NSM']}_{config['NSUE']}.txt"
+                return f"{config['RFC']}_{config['NSM']}_{config['NSUT']}.txt"
             elif tipo_registro == "SistemaMedicion":
-                return f"{config['RFC']}_{config['NSUE']}.txt"
+                return f"{config['RFC']}_{config['NSUT']}.txt"
         except Exception as e:
             logging.error(f"Error nombre histórico: {e}")
             return "historico_mediciones.txt"
@@ -89,9 +89,9 @@ class FileNameGenerator(IFileNameGenerator):
             config = self.config_provider.get_config()
             fecha = datetime.now().strftime("%Y%m%d")
             if tipo_registro == "Medidor":
-                return f"{config['RFC']}_{fecha}_{config['NSM']}_{config['NSUE']}.txt"
+                return f"{config['RFC']}_{fecha}_{config['NSM']}_{config['NSUT']}.txt"
             elif tipo_registro == "SistemaMedicion":
-                return f"{config['RFC']}_{fecha}_{config['NSUE']}.txt"
+                return f"{config['RFC']}_{fecha}_{config['NSUT']}.txt"
         except Exception as e:
             logging.error(f"Error nombre diario: {e}")
             return f"reporte_{datetime.now().strftime('%Y%m%d')}.txt"

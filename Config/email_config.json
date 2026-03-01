@@ -3,10 +3,9 @@
     "smtp_port": 587,
     "from": "teseractohgf@gmail.com",
     "to": [
-        "ahuertajesus@gmail.com",
-        "leohuer456@gmail.com"
+        "teseractohgf@gmail.com"
     ],
-    "subject": "Reporte en desarrollo VSCode Tesseract",
+    "subject": "Reporte enviado VSCode TESERACTO TEST del 17 de diciembre en la madrugada",
     "username": "teseractohgf@gmail.com",
     "password": "wsis imsg gsve tyzi"
 }

@@ -675,8 +675,9 @@ class FTPEmailConfigWindow(QWidget):
     # ========== MÉTODOS EXISTENTES QUE FUNCIONAN BIEN ==========
     
     def guardar_configuracion(self):
-        """Guarda configuración (ya funciona bien)"""
+        """Guarda configuración y actualiza todos los servicios en ejecución"""
         try:
+            # Validación
             if not self.txt_host.text().strip():
                 QMessageBox.warning(self, "Validación", "El servidor FTP es obligatorio")
                 return
@@ -684,17 +685,19 @@ class FTPEmailConfigWindow(QWidget):
             hora = self.time_envio.time()
             hora_str = f"{hora.hour():02d}:{hora.minute():02d}"
             
+            # Configuración FTP
             ftp_config = {
                 "host": self.txt_host.text().strip(),
                 "usuario": self.txt_usuario.text().strip(),
                 "clave": self.txt_clave.text(),
                 "ruta_remota": self.txt_ruta_remota.text().strip(),
                 "hora_envio": hora_str,
-                "timeout": 30,
+                "timeout": 60,
                 "secure": False,
                 "puerto": 21
             }
             
+            # Configuración Email
             email_config = None
             if self.txt_smtp.text().strip():
                 email_config = {
@@ -707,18 +710,25 @@ class FTPEmailConfigWindow(QWidget):
                     "password": self.txt_clave_smtp.text()
                 }
             
-            ftp_config_path = path_manager.get_config_path("ftp_config.json")
-            with open(ftp_config_path, 'w', encoding='utf-8') as f:
-                json.dump(ftp_config, f, indent=4, ensure_ascii=False)
-            
+            # ✅ USAR ConfigManager PARA GUARDAR (COHERENCIA)
+            from Core.System.ConfigManager import ConfigManager
+            ConfigManager.guardar_config_ftp(ftp_config)
             if email_config:
-                email_config_path = path_manager.get_config_path("email_config.json")
-                with open(email_config_path, 'w', encoding='utf-8') as f:
-                    json.dump(email_config, f, indent=4, ensure_ascii=False)
+                ConfigManager.guardar_config_email(email_config)
             
+            # ✅ ACTUALIZAR FTPManager EN TIEMPO DE EJECUCIÓN
+            if hasattr(self.file_scheduler.transfer_service, 'actualizar_configuracion'):
+                self.file_scheduler.transfer_service.actualizar_configuracion(ftp_config)
+            
+            # ✅ ACTUALIZAR CONFIGURACIÓN EMAIL EN FileScheduler
+            if email_config and hasattr(self.file_scheduler, '_actualizar_config_email'):
+                self.file_scheduler._actualizar_config_email(email_config)
+            
+            # ✅ ACTUALIZAR HORA DE ENVÍO
             if hasattr(self.file_scheduler, 'actualizar_hora_envio'):
                 self.file_scheduler.actualizar_hora_envio(hora_str)
             
+            # ✅ REINICIAR SCHEDULER SI ESTÁ HABILITADO
             if self.chk_habilitado.isChecked():
                 if hasattr(self.file_scheduler, 'detener'):
                     self.file_scheduler.detener()
@@ -731,14 +741,14 @@ class FTPEmailConfigWindow(QWidget):
             QMessageBox.information(
                 self,
                 "✅ Configuración Guardada",
-                f"Configuración del sistema automático guardada:\n\n"
+                f"Configuración actualizada y aplicada a todos los servicios:\n\n"
                 f"• Servidor FTP: {ftp_config['host']}\n"
                 f"• Hora automática: {hora_str}\n"
-                f"• Modo: {'ACTIVO' if self.chk_habilitado.isChecked() else 'INACTIVO'}\n\n"
-                f"El scheduler se ha reiniciado con la nueva configuración."
+                f"• Destinatarios: {len(email_config['to']) if email_config else 0}\n"
+                f"• Modo: {'ACTIVO' if self.chk_habilitado.isChecked() else 'INACTIVO'}"
             )
             
-            self._agregar_log(f"✅ Configuración guardada - Hora: {hora_str}")
+            self._agregar_log(f"✅ Configuración guardada y aplicada - Hora: {hora_str}")
             self._actualizar_estado_ui()
             
         except Exception as e:
