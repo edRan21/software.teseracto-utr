@@ -5,6 +5,8 @@ import time
 import logging
 from typing import Dict, List, Callable
 from PyQt5.QtCore import QObject, pyqtSignal, QTimer
+# APORTACIÓN 1: Importar ErrorHandler
+from Core.System.ErrorHandler import ErrorHandler
 
 class ThreadManager(QObject):
     """Gestiona hilos de trabajo de forma segura y evita acumulación"""
@@ -25,23 +27,26 @@ class ThreadManager(QObject):
         self.cleanup_timer.timeout.connect(self._cleanup_stuck_threads)
         self.cleanup_timer.start(5000)  # Cada 5 segundos
 
-    def start_thread(self, thread_id: str, target: Callable, args: tuple = (), timeout: float = None) -> bool:
+    # APORTACIÓN 1: Agregar error_handler opcional
+    def start_thread(self, thread_id: str, target: Callable, args: tuple = (), timeout: float = None, error_handler: ErrorHandler = None) -> bool:
         """Inicia un hilo de forma controlada"""
         
-        # Verificar límite de hilos
         if len(self._active_threads) >= self._max_threads:
-            logging.warning(f"Límite de hilos alcanzado. Rechazando: {thread_id}")
+            msg = f"Límite de hilos alcanzado. Rechazando: {thread_id}"
+            logging.warning(msg)
+            # APORTACIÓN 1: Notificación visual
+            if error_handler:
+                error_handler.log_error("010", msg, es_error_sistema=True)
             return False
             
-        # Limpiar hilos completados
         self._cleanup_completed_threads()
         
-        # Crear y iniciar hilo
         thread = threading.Thread(
             target=self._thread_wrapper,
-            args=(thread_id, target, args, timeout or self._default_timeout),
+            # Pasamos el error_handler al wrapper
+            args=(thread_id, target, args, timeout or self._default_timeout, error_handler),
             name=f"Worker-{thread_id}",
-            daemon=True  # IMPORTANTE: Hilos daemon no bloquean cierre de app
+            daemon=True
         )
         
         self._active_threads[thread_id] = thread
@@ -51,28 +56,28 @@ class ThreadManager(QObject):
         logging.debug(f"Hilo iniciado: {thread_id}")
         return True
 
-    def _thread_wrapper(self, thread_id: str, target: Callable, args: tuple, timeout: float):
+    # APORTACIÓN 1: El wrapper ahora acepta y usa el error_handler
+    def _thread_wrapper(self, thread_id: str, target: Callable, args: tuple, timeout: float, error_handler: ErrorHandler = None):
         """Envuelve la ejecución del hilo con manejo de errores y timeout"""
         start_time = time.time()
         success = False
         
         try:
-            # Ejecutar la función objetivo
             target(*args)
             success = True
             
         except Exception as e:
-            logging.error(f"Error en hilo {thread_id}: {e}")
+            msg = f"Colapso en proceso en segundo plano: {thread_id}"
+            logging.error(f"{msg}. Detalle: {e}")
+            # APORTACIÓN 1: Notificación visual del fallo del hilo
+            if error_handler:
+                error_handler.log_error("010", msg, es_error_sistema=True)
             success = False
             
         finally:
-            # Eliminar de hilos activos
             self._active_threads.pop(thread_id, None)
             self._thread_timeouts.pop(thread_id, None)
-            
-            # Emitir señal (debe ejecutarse en el hilo principal)
             self.thread_finished.emit(thread_id, success)
-            
             execution_time = time.time() - start_time
             logging.debug(f"Hilo {thread_id} finalizado en {execution_time:.2f}s")
 

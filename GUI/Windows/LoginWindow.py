@@ -5,9 +5,99 @@ from PyQt5.QtWidgets import QLineEdit, QPushButton, QVBoxLayout, QLabel, QHBoxLa
 from PyQt5.QtCore import pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor
 from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (QDialog, QTableWidget, QTableWidgetItem, QHeaderView, 
+                             QInputDialog, QMessageBox, QComboBox, QFormLayout)
 from Core.System.ConfigManager import ConfigManager
 from Core.System.PathManager import path_manager  # ✅ Importar PathManager
 from GUI.Windows.BaseWindow import FramelessWindow
+
+class GestionUsuariosDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Gestión de Usuarios (Maestro)")
+        self.setFixedSize(500, 400)
+        self.setStyleSheet("""
+            QDialog { background-color: #2b2b2b; color: white; }
+            QLabel { color: white; font-weight: bold; }
+            QLineEdit, QComboBox { background-color: #3b3b3b; color: white; padding: 5px; border: 1px solid #555; }
+            QPushButton { background-color: #2E86C1; color: white; padding: 5px; font-weight: bold; }
+            QPushButton:hover { background-color: #2874A6; }
+            QTableWidget { background-color: #3b3b3b; color: white; gridline-color: #555; }
+            QHeaderView::section { background-color: #1e1e1e; color: white; padding: 5px; }
+        """)
+        self.setup_ui()
+        self.cargar_usuarios()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Tabla de usuarios
+        self.tabla = QTableWidget()
+        self.tabla.setColumnCount(2)
+        self.tabla.setHorizontalHeaderLabels(["Usuario", "Rol"])
+        self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.tabla)
+        
+        # Formulario para nuevo usuario
+        form_layout = QFormLayout()
+        self.txt_nuevo_user = QLineEdit()
+        self.txt_nuevo_pass = QLineEdit()
+        self.txt_nuevo_pass.setEchoMode(QLineEdit.Password)
+        self.cmb_rol = QComboBox()
+        self.cmb_rol.addItems(["operador", "admin"])
+        
+        form_layout.addRow("Nuevo Usuario:", self.txt_nuevo_user)
+        form_layout.addRow("Contraseña:", self.txt_nuevo_pass)
+        form_layout.addRow("Rol:", self.cmb_rol)
+        layout.addLayout(form_layout)
+        
+        # Botones de acción
+        btn_layout = QHBoxLayout()
+        self.btn_agregar = QPushButton("Agregar / Actualizar")
+        self.btn_eliminar = QPushButton("Eliminar Seleccionado")
+        self.btn_eliminar.setStyleSheet("background-color: #E74C3C;")
+        
+        self.btn_agregar.clicked.connect(self.agregar_usuario)
+        self.btn_eliminar.clicked.connect(self.eliminar_usuario)
+        
+        btn_layout.addWidget(self.btn_agregar)
+        btn_layout.addWidget(self.btn_eliminar)
+        layout.addLayout(btn_layout)
+
+    def cargar_usuarios(self):
+        usuarios = ConfigManager.obtener_lista_usuarios()
+        self.tabla.setRowCount(len(usuarios))
+        for row, data in enumerate(usuarios):
+            self.tabla.setItem(row, 0, QTableWidgetItem(data["usuario"]))
+            self.tabla.setItem(row, 1, QTableWidgetItem(data["rol"]))
+
+    def agregar_usuario(self):
+        user = self.txt_nuevo_user.text().strip()
+        pwd = self.txt_nuevo_pass.text()
+        rol = self.cmb_rol.currentText()
+        
+        if not user or not pwd:
+            QMessageBox.warning(self, "Error", "Usuario y contraseña son obligatorios.")
+            return
+            
+        ConfigManager.crear_usuario(user, pwd, rol)
+        self.txt_nuevo_user.clear()
+        self.txt_nuevo_pass.clear()
+        self.cargar_usuarios()
+        QMessageBox.information(self, "Éxito", f"Usuario '{user}' guardado correctamente.")
+
+    def eliminar_usuario(self):
+        row = self.tabla.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Error", "Seleccione un usuario de la tabla.")
+            return
+            
+        user = self.tabla.item(row, 0).text()
+        if ConfigManager.eliminar_usuario(user):
+            self.cargar_usuarios()
+            QMessageBox.information(self, "Éxito", f"Usuario '{user}' eliminado.")
+        else:
+            QMessageBox.critical(self, "Error", f"No se puede eliminar al usuario base '{user}'.")
 
 class LoginWindow(FramelessWindow):
     login_success = pyqtSignal(str)  # Señal con nombre de usuario
@@ -17,12 +107,12 @@ class LoginWindow(FramelessWindow):
         self.error_handler = error_handler
         
         # Configurar ventana
-        self.setWindowTitle("Login - TESERACTO UTR")
+        self.setWindowTitle("Login - TESSERACTO UTR")
         self.resize(800, 600) # Tamaño base, pero se maximizará
         self.setMinimumSize(500, 350) # Tamaño mínimo
         
         # Configurar barra de título (CON botón de maximizar)
-        self.setup_title_bar("Login - TESERACTO UTR", show_maximize=True)
+        self.setup_title_bar("Login - TESSERACTO UTR", show_maximize=True)
         
         # Cargar imagen de fondo
         self.background_image = self.load_background_image()
@@ -31,6 +121,8 @@ class LoginWindow(FramelessWindow):
         self.txt_user = QLineEdit(placeholderText="Usuario")
         self.txt_pass = QLineEdit(placeholderText="Contraseña", echoMode=QLineEdit.Password)
         self.btn_login = QPushButton("Iniciar Sesión")
+        self.btn_gestion = QPushButton("⚙️ Gestión de Usuarios") # NUEVO BOTÓN
+        self.btn_gestion.setObjectName("btn_gestion")  
         self.lbl_status = QLabel()
         
         # Hacer los campos de texto y botón más grandes
@@ -57,7 +149,7 @@ class LoginWindow(FramelessWindow):
         form_layout = QVBoxLayout()
         
         # Título de la aplicación
-        app_title = QLabel("TESERACTO UTR")
+        app_title = QLabel("TESSERACTO UTR")
         app_title.setAlignment(Qt.AlignCenter)
         app_title.setStyleSheet("""
             QLabel {
@@ -77,6 +169,7 @@ class LoginWindow(FramelessWindow):
         form_layout.addWidget(QLabel("Contraseña:"))
         form_layout.addWidget(self.txt_pass)
         form_layout.addWidget(self.btn_login)
+        form_layout.addWidget(self.btn_gestion) # AGREGAR AL LAYOUT
         form_layout.addWidget(self.lbl_status)
         
         # Establecer espaciado
@@ -105,6 +198,7 @@ class LoginWindow(FramelessWindow):
         # Conexiones
         self.btn_login.clicked.connect(self.authenticate)
         self.txt_pass.returnPressed.connect(self.authenticate)
+        self.btn_gestion.clicked.connect(self.abrir_gestion_usuarios) # CONEXIÓN NUEVA
         
         # Mostrar la ventana maximizada
         QTimer.singleShot(100, self.showMaximized)
@@ -189,6 +283,9 @@ class LoginWindow(FramelessWindow):
                 border-radius: 3px;
                 font-size: 14px;
             }
+            QPushButton#btn_gestion {
+                background-color: rgba(100, 100, 100, 180);
+            }
         """
         self.content_widget.setStyleSheet(style)
         self.lbl_status.setObjectName("status")
@@ -201,4 +298,22 @@ class LoginWindow(FramelessWindow):
             self.login_success.emit(user)
         else:
             self.lbl_status.setText("❌ Credenciales inválidas")
-            self.error_handler.log_evento("LOGIN_FAIL", f"Intento fallido para usuario: {user}")
+            # APORTACIÓN 2: Corrección de orden de parámetros y código de evento
+            self.error_handler.log_evento(f"Intento fallido de inicio de sesión para usuario: {user}", "401")
+    
+    def abrir_gestion_usuarios(self):
+        """Solicita contraseña maestra y abre el panel de gestión si es correcta"""
+        pwd, ok = QInputDialog.getText(
+            self, 
+            "Autenticación Maestra", 
+            "Ingrese la Contraseña Maestra del Sistema:", 
+            QLineEdit.Password
+        )
+        
+        if ok and pwd:
+            if ConfigManager.validar_password_maestra(pwd):
+                dialog = GestionUsuariosDialog(self)
+                dialog.exec_()
+            else:
+                self.error_handler.log_evento("Intento de acceso maestro fallido", "401")
+                QMessageBox.critical(self, "Acceso Denegado", "Contraseña maestra incorrecta.")

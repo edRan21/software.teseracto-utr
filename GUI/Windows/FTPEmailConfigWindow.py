@@ -402,7 +402,8 @@ class FTPEmailConfigWindow(QWidget):
                 self._agregar_log(f"🔄 Scheduler activo - Próximo: {estado.get('proxima_ejecucion', '--:--')}")
                 
         except Exception as e:
-            self.error_handler.log_error("UI-ESTADO", f"Error procesando estado: {e}")
+            # APORTACIÓN 1: Código oficial "010"
+            self.error_handler.log_error("010", f"Error actualizando estado UI del scheduler: {e}", es_error_sistema=True)
     
     def _procesar_archivos_actualizados(self, archivos):
         """Procesa lista actualizada de archivos"""
@@ -443,7 +444,8 @@ class FTPEmailConfigWindow(QWidget):
                 self.tabla_archivos.setItem(i, 5, item_prioridad)
                 
         except Exception as e:
-            self.error_handler.log_error("UI-ARCHIVOS", f"Error procesando archivos: {e}")
+            # APORTACIÓN 1: Código oficial "010"
+            self.error_handler.log_error("010", f"Error actualizando lista de archivos en UI: {e}", es_error_sistema=True)
     
     def _agregar_log(self, mensaje):
         """Agrega un mensaje al log"""
@@ -497,11 +499,15 @@ class FTPEmailConfigWindow(QWidget):
                 else:
                     self._agregar_log("❌ Prueba FTP fallida")
                     QMessageBox.warning(self, "❌ Fallo", message)
+                    # APORTACIÓN 2: Notificar fallo al centro de mensajes
+                    self.error_handler.log_error("FTP-TEST", f"Prueba FTP fallida: {message}", es_error_sistema=True)
                     
             except Exception as e:
                 self.btn_probar_ftp.setEnabled(True)
                 self.btn_probar_ftp.setText("🔍 PROBAR FTP")
                 self._agregar_log(f"❌ Error prueba FTP: {e}")
+                # APORTACIÓN 2: Notificar excepción
+                self.error_handler.log_error("FTP-TEST", f"Excepción durante prueba FTP: {e}", es_error_sistema=True)
         
         # Ejecutar después de 100ms para no bloquear UI
         QTimer.singleShot(100, execute_test)
@@ -569,11 +575,15 @@ class FTPEmailConfigWindow(QWidget):
                 else:
                     self._agregar_log("❌ Error prueba email")
                     QMessageBox.critical(self, "❌ Error", message)
+                    # APORTACIÓN 2: Notificar fallo al centro de mensajes
+                    self.error_handler.log_error("EMAIL-TEST", f"Prueba Email fallida: {message}", es_error_sistema=True)
                     
             except Exception as e:
                 self.btn_probar_email.setEnabled(True)
                 self.btn_probar_email.setText("📧 PROBAR EMAIL")
                 self._agregar_log(f"❌ Error prueba email: {e}")
+                # APORTACIÓN 2: Notificar excepción
+                self.error_handler.log_error("EMAIL-TEST", f"Excepción durante prueba Email: {e}", es_error_sistema=True)
         
         # Ejecutar después de 100ms para no bloquear UI
         QTimer.singleShot(100, execute_test)
@@ -657,7 +667,8 @@ class FTPEmailConfigWindow(QWidget):
                     self._agregar_log(f"⚡ Envío inmediato completado: {resultado['exitosos']} exitosos")
                     
                 except Exception as e:
-                    self.error_handler.log_error("ENVIO-COMPLETED", f"Error: {e}")
+                    # APORTACIÓN 1: Código oficial "010"
+                    self.error_handler.log_error("010", f"Error procesando resultado de envío inmediato: {e}", es_error_sistema=True)
                     if self.progress_dialog:
                         self.progress_dialog.close()
                         self.progress_dialog = None
@@ -666,7 +677,8 @@ class FTPEmailConfigWindow(QWidget):
             QTimer.singleShot(100, process_result)
             
         except Exception as e:
-            self.error_handler.log_error("FORZAR-ENVIO", f"Error: {e}")
+            # APORTACIÓN 1: Código oficial "010"
+            self.error_handler.log_error("010", f"Fallo al forzar envío inmediato: {e}", es_error_sistema=True)
             if self.progress_dialog:
                 self.progress_dialog.close()
                 self.progress_dialog = None

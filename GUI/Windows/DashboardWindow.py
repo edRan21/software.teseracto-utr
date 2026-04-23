@@ -87,13 +87,12 @@ class DashboardWindow(QWidget):
                 pixmap = QPixmap(str(image_path))
                 return pixmap.scaled(320, 320, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             else:
-                self.error_handler.log_error(
-                    "DASH_LOGO", 
-                    f"Imagen de logo no encontrada: {image_path}"
-                )
+                # APORTACIÓN 1: Código oficial 301
+                self.error_handler.log_error("301", f"Imagen de logo no encontrada: {image_path}", es_error_sistema=True)
                 return None
         except Exception as e:
-            self.error_handler.log_error("DASH_LOGO", f"Error cargando logo: {str(e)}")
+            # APORTACIÓN 1: Código oficial 301
+            self.error_handler.log_error("301", f"Error cargando logo: {str(e)}", es_error_sistema=True)
             return None
 
     def apply_dark_theme(self):
@@ -134,7 +133,7 @@ class DashboardWindow(QWidget):
         title_top_layout = QHBoxLayout()
         
         title_container = QVBoxLayout()
-        self.title_label = QLabel("TESERACTO UTR")
+        self.title_label = QLabel("TESSERACTO UTR")
         self.title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #ffffff;")
         title_container.addWidget(self.title_label)
         
@@ -481,10 +480,12 @@ class DashboardWindow(QWidget):
                     self.lbl_codigo_error.setText("N/A")
             
             except Exception as e:
-                self.error_handler.log_error("DASH_STATS", f"Error actualizando estadísticas: {str(e)}")
+                # APORTACIÓN 1: Código oficial 010
+                self.error_handler.log_error("010", f"Error actualizando estadísticas visuales: {str(e)}", es_error_sistema=True)
                 
         except Exception as e:
-            self.error_handler.log_error("DASH_PROCESS", f"Error procesando datos: {str(e)}")
+            # APORTACIÓN 1: Código oficial 010
+            self.error_handler.log_error("010", f"Error procesando datos en dashboard: {str(e)}", es_error_sistema=True)
 
     def actualizar_ui(self):
         """Actualización rápida de UI (siempre en hilo principal)"""
@@ -509,7 +510,8 @@ class DashboardWindow(QWidget):
             self.style().polish(self.connection_status)
                 
         except Exception as e:
-            self.error_handler.log_error("DASH_CONN", f"Error verificando conexión: {str(e)}")
+            # APORTACIÓN 1: Código oficial 007
+            self.error_handler.log_error("007", f"Error verificando conexión visual: {str(e)}", es_error_sistema=True)
 
     def actualizar_unidades(self):
         try:
@@ -524,13 +526,15 @@ class DashboardWindow(QWidget):
             self.flow_unit.setText(self.unidad_visual)
             
         except Exception as e:
-            self.error_handler.log_error("DASH_UNIT", f"Error actualizando unidades: {str(e)}")
+            # APORTACIÓN 1: Código oficial 303
+            self.error_handler.log_error("303", f"Error de conversión actualizando unidades: {str(e)}", es_error_sistema=True)
             self.unidad_medidor = "m³/h"
             self.unidad_visual = "m³/h"
 
     def manejar_error_lectura(self, mensaje_error):
         """Maneja errores de lectura desde el worker"""
-        self.error_handler.log_error("DASH_READ", mensaje_error)
+        # APORTACIÓN 1: Código oficial 007
+        self.error_handler.log_error("007", mensaje_error, es_error_sistema=True)
         self.system_status.setText("⚠️ Error en lectura")
         self.system_status.setProperty("class", "system-error")
 
@@ -555,7 +559,8 @@ class DashboardWindow(QWidget):
             self.iniciar_lectura_segura()
             
         except Exception as e:
-            self.error_handler.log_error("DASH_REFRESH", f"Error refrescando unidades: {str(e)}")
+            # APORTACIÓN 1: Código oficial 301
+            self.error_handler.log_error("301", f"Error refrescando configuración visual: {str(e)}", es_error_sistema=True)
 
     def closeEvent(self, event):
         """Cierre seguro liberando recursos"""

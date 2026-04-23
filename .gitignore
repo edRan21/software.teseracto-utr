@@ -1,9 +1,9 @@
 
 backups_envios
 build
-__pycache__
+__pycache__/
 dist
 logs_envios
 errores.log
-
+venv
 

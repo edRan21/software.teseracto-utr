@@ -13,32 +13,28 @@ from GUI.Windows.ConfigWindow import ConfigWindow
 from GUI.Windows.ReportsWindow import ReportsWindow
 from GUI.Windows.ErrorConsoleWindow import ErrorConsoleWindow
 from GUI.Windows.FTPConaguaWindow import FTPConaguaWindow
+from Core.System.ConfigManager import ConfigManager
 from PyQt5.QtCore import QTimer
 
 class MainWindow(FramelessWindow):
-    def __init__(self, user, error_handler, sensor_profiles, file_scheduler):
+    # 1. Actualiza el __init__
+    def __init__(self, user, error_handler, sensor_profiles, file_scheduler, usb_manejador=None):
         super().__init__()
         self.user = user
         self.error_handler = error_handler
         self.sensor_profiles = sensor_profiles
         self.file_scheduler = file_scheduler
+        self.usb_manejador = usb_manejador # <--- Lo guardamos
         
-        # Configurar ventana
-        self.setWindowTitle(f"TESERACTO - UTR - {user}")
+        # AGREGAR ESTA LÍNEA: Obtener el rol dinámicamente
+        self.rol_usuario = ConfigManager.obtener_rol_usuario(self.user)
 
-        # Establecer un tamaño base, pero se maximizará
+        self.setWindowTitle(f"TESSERACTO - UTR - {self.user}")
         self.resize(1000, 700)
+        self.setup_title_bar(f"TESSERACTO - UTR", show_maximize=True)
         
-        # Configurar barra de título con botón de maximizar
-        self.setup_title_bar(f"TESERACTO - UTR - {user}", show_maximize=True)
-        
-        # 1. PRIMERO: Construir la interfaz UI
         self.setup_ui()
-        
-        # 2. SEGUNDO: Inicializar subsistemas (CON self.tabs YA CREADO)
         self._init_subsystems()
-        
-        # 3. TERCERO: Configurar  verificación básica del medidor
         self.setup_basic_monitoring()
         
     def setup_ui(self):
@@ -76,10 +72,14 @@ class MainWindow(FramelessWindow):
         self.dashboard_window = DashboardWindow(None, self.error_handler)
         self.config_window = ConfigWindow(None, self.error_handler)
         
-        # Añadir pestañas
         self.tabs.addTab(self.dashboard_window, "Dashboard")
-        self.tabs.addTab(self.config_window, "Configuración Hardware")
-        self.tabs.addTab(ReportsWindow(None, self.error_handler), "Reportes")
+        
+        # INYECCIÓN: Solo el admin ve la pestaña de Hardware Modbus
+        if self.rol_usuario == "admin":
+            self.tabs.addTab(self.config_window, "Configuración Hardware")
+            
+        # APORTACIÓN: Le pasamos el usb_manejador a ReportsWindow    
+        self.tabs.addTab(ReportsWindow(None, self.error_handler, self.usb_manejador), "Reportes")
         self.tabs.addTab(ErrorConsoleWindow(self.error_handler), "Errores")
         
         # Crear barra de menú personalizada
@@ -151,8 +151,7 @@ class MainWindow(FramelessWindow):
         menu_layout.setSpacing(5)
         
         # Botones de menú personalizados
-        config_btn = QPushButton("Configuración Hardware")
-        config_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        
         
         system_btn = QPushButton("Configuración Sistema")
         system_btn.clicked.connect(self.show_system_settings)
@@ -167,11 +166,16 @@ class MainWindow(FramelessWindow):
         conagua_btn = QPushButton("FTP Unidad de Inspección")
         conagua_btn.clicked.connect(self.show_ftp_conagua)
         
-        menu_layout.addWidget(config_btn)
+        # ANCLA (PUNTO 3): Nuevo botón de Cambio de Sesión
+        cambiar_sesion_btn = QPushButton("🔄 Cambiar Sesión")
+        cambiar_sesion_btn.setStyleSheet("background-color: #E67E22; color: white; font-weight: bold;")
+        cambiar_sesion_btn.clicked.connect(self.cambiar_sesion)
+        
         menu_layout.addWidget(system_btn)
         menu_layout.addWidget(ftp_btn)
         menu_layout.addWidget(sms_btn)
         menu_layout.addWidget(conagua_btn)
+        menu_layout.addWidget(cambiar_sesion_btn) # Agregar al layout visual
         
         menu_layout.addStretch()  # Espaciador para alinear a la izquierda
         
@@ -181,9 +185,14 @@ class MainWindow(FramelessWindow):
     def show_warning(self, message):
         self.status_bar.showMessage(f"⚠️ {message}", 5000)
     
-    # Los métodos restantes permanecen igual...
+    
     def show_system_settings(self):
-        self.settings_win = SettingsWindow()
+        # INYECCIÓN: Validar rol antes de abrir
+        if self.rol_usuario != "admin":
+            QMessageBox.warning(self, "Acceso Denegado", "Solo el Técnico (Admin) puede modificar la configuración del sistema.")
+            return
+            
+        self.settings_win = SettingsWindow(self.error_handler)
         self.settings_win.config_updated.connect(self.handle_config_update)
         self.settings_win.show()
     
@@ -194,9 +203,98 @@ class MainWindow(FramelessWindow):
     
     def show_sms_config(self):
         """Muestra la ventana de configuración SMS"""
+        # ANCLA (PUNTO 2): Validación de rol para SMS
+        if self.rol_usuario != "admin":
+            QMessageBox.warning(self, "Acceso Denegado", "Solo el Técnico (Admin) puede configurar los SMS.")
+            return
+            
         self.sms_window = SMSConfigWindow(self.error_handler)
         self.sms_window.show()
+        
+    # ANCLA (PUNTO 3): Lógica de cambio de sesión CORREGIDA - sin matar los procesos de una sesión ni creación de directorios temporales
+    def cambiar_sesion(self):
+        from PyQt5.QtWidgets import QInputDialog, QLineEdit, QDialog, QVBoxLayout, QLabel, QComboBox, QPushButton, QMessageBox
+        from Core.System.ConfigManager import ConfigManager
+        
+        # 1. Validación con Contraseña Maestra para autorizar la acción
+        pwd, ok = QInputDialog.getText(
+            self, 
+            "Autorización de Cambio", 
+            "Ingrese Contraseña Maestra para autorizar el cambio de sesión:", 
+            QLineEdit.Password
+        )
+        
+        if not ok or not pwd:
+            return
+            
+        if not ConfigManager.validar_password_maestra(pwd):
+            QMessageBox.critical(self, "Acceso Denegado", "Contraseña Maestra incorrecta.")
+            return
 
+        # 2. Diálogo de "Cambio en Caliente" (Sin cerrar el sistema)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Seleccionar Nueva Sesión")
+        dialog.setFixedSize(300, 150)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #2b2b2b; color: white; }
+            QLabel { color: white; font-weight: bold; }
+            QComboBox { background-color: #3b3b3b; color: white; padding: 5px; border: 1px solid #555; }
+            QPushButton { background-color: #E67E22; color: white; padding: 8px; font-weight: bold; }
+            QPushButton:hover { background-color: #D35400; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Seleccione el usuario destino:"))
+
+        cmb_usuarios = QComboBox()
+        usuarios = ConfigManager.obtener_lista_usuarios()
+        for u in usuarios:
+            cmb_usuarios.addItem(f"{u['usuario']} ({u['rol']})", u['usuario'])
+        layout.addWidget(cmb_usuarios)
+
+        btn_cambiar = QPushButton("Aplicar Cambio en ejecución...")
+        layout.addWidget(btn_cambiar)
+
+        def aplicar():
+            nuevo_usuario = cmb_usuarios.currentData()
+            self.user = nuevo_usuario
+            self.rol_usuario = ConfigManager.obtener_rol_usuario(nuevo_usuario)
+            
+            # Ejecutar el cambio visual SIN tocar el backend
+            self.aplicar_restricciones_rol()
+            dialog.accept()
+            self.show_warning(f"🔄 Sesión cambiada a: {nuevo_usuario}")
+
+        btn_cambiar.clicked.connect(aplicar)
+        dialog.exec_()
+          
+    def aplicar_restricciones_rol(self):
+        """Aplica o remueve restricciones visuales en tiempo real sin reiniciar el sistema"""
+        # 1. Actualizar el título de la ventana
+        self.setWindowTitle(f"TESERACTO - UTR - {self.user}")
+        if hasattr(self, 'title_bar') and hasattr(self.title_bar, 'title_label'):
+            self.title_bar.title_label.setText(f"TESERACTO - UTR - {self.user}")
+
+        # 2. Buscar si la pestaña de Hardware existe actualmente
+        idx_hardware = -1
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i) == "Configuración Hardware":
+                idx_hardware = i
+                break
+
+        # 3. Aplicar lógica visual según el nuevo rol
+        if self.rol_usuario == "admin":
+            # Si es admin y la pestaña está oculta, se la devolvemos
+            if idx_hardware == -1:
+                self.tabs.insertTab(1, self.config_window, "Configuración Hardware")
+        else:
+            # Si es operador y la pestaña está visible, se la quitamos (bloqueo)
+            if idx_hardware != -1:
+                # Si el técnico estaba viendo esa pestaña, lo forzamos a ver el Dashboard
+                if self.tabs.currentIndex() == idx_hardware:
+                    self.tabs.setCurrentIndex(0)
+                self.tabs.removeTab(idx_hardware)
+    
     def show_ftp_conagua(self):
         """Mostrar ventana de FTP CONAGUA con manejo mejorado"""
         try:
@@ -222,15 +320,18 @@ class MainWindow(FramelessWindow):
         """Muestra la ventana de configuración FTP/Email"""
         from GUI.Windows.FTPEmailConfigWindow import FTPEmailConfigWindow
         
-        self.config_window = FTPEmailConfigWindow(
+        # CORRECCIÓN: Usar una variable única (self.ftp_email_window) 
+        # para no sobreescribir self.config_window (Hardware)
+        self.ftp_email_window = FTPEmailConfigWindow(
             file_scheduler=self.file_scheduler,
             error_handler=self.error_handler
         )
-        self.config_window.show()
+        self.ftp_email_window.show()
 
     def _init_subsystems(self):
         if not self.sensor_profiles:
-            self.error_handler.log_error("HW-001", "No hay perfiles de sensor disponibles")
+            # APORTACIÓN 1: Uso del código oficial "301" en lugar de "HW-001"
+            self.error_handler.log_error("301", "No hay perfiles de sensor disponibles en la configuración", es_error_sistema=True)
             return
         
         # Encontrar el perfil activo
@@ -239,8 +340,10 @@ class MainWindow(FramelessWindow):
             if profile.get("habilitado", True):
                 active_profile = profile
                 break
+                
         if not active_profile:
-            self.error_handler.log_error("HW-001", "No hay perfiles habilitados")
+            # APORTACIÓN 1: Uso del código oficial "301" en lugar de "HW-001"
+            self.error_handler.log_error("301", "Todos los perfiles de sensor están deshabilitados", es_error_sistema=True)
             return
         
         # Crear el medidor con el perfil activo
@@ -262,7 +365,7 @@ class MainWindow(FramelessWindow):
         self.config_window.medidor = self.medidor
         
         if hasattr(self.dashboard_window, 'setup_timers'):
-            self.dashboard_window.setup_timers()  # ✅ Nuevo método
+            self.dashboard_window.setup_timers()
         
         # Cargar configuración inicial en la ventana de configuración
         if hasattr(self.config_window, 'load_initial_config'):

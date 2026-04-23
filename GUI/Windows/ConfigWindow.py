@@ -307,7 +307,8 @@ class ConfigWindow(QWidget):
                 self.cmb_profiles.addItem(profile["nombre"], profile)
         except Exception as e:
             if self.error_handler:
-                self.error_handler.log_error("CONFIG_LOAD", f"Error cargando perfiles: {e}")
+                # APORTACIÓN 1: Uso del código oficial "CONFIG-LOAD"
+                self.error_handler.log_error("CONFIG-LOAD", f"Error cargando perfiles: {e}", es_error_sistema=True)
             else:
                 logging.error(f"Error cargando perfiles: {e}")
 
@@ -323,7 +324,8 @@ class ConfigWindow(QWidget):
                 self.cmb_ports.setCurrentIndex(0)
         except Exception as e:
             if self.error_handler:
-                self.error_handler.log_error("PORT_REFRESH", f"Error detectando puertos: {e}")
+                # APORTACIÓN 1: Uso del código oficial "005"
+                self.error_handler.log_error("005", f"Error detectando puertos COM: {e}", es_error_sistema=True)
             else:
                 logging.error(f"Error detectando puertos: {e}")
 
@@ -463,7 +465,8 @@ class ConfigWindow(QWidget):
             self.lbl_status.setStyleSheet("color: #27AE60;")
             
         except Exception as e:
-            self.error_handler.log_error("CONFIG_SAVE", f"Error guardando perfil: {e}")
+            # APORTACIÓN 1: Uso del código oficial "CONFIG-SAVE"
+            self.error_handler.log_error("CONFIG-SAVE", f"Error guardando perfil: {e}", es_error_sistema=True)
             self.lbl_status.setText(f"❌ Error: {str(e)}")
             self.lbl_status.setStyleSheet("color: #E74C3C;")
             
@@ -529,7 +532,8 @@ class ConfigWindow(QWidget):
 
     def handle_connection_error(self, error):
         self.setEnabled(True)
-        self.error_handler.log_error("CONFIG_APPLY", f"Error crítico: {error}")
+        # APORTACIÓN 1: Uso del código oficial "007"
+        self.error_handler.log_error("007", f"Error aplicando configuración Modbus: {error}", es_error_sistema=True)
         self.lbl_status.setText(f"❌ Error: {str(error)}")
         self.lbl_status.setStyleSheet("color: #E74C3C;")
         
@@ -712,6 +716,8 @@ class ConfigWindow(QWidget):
             if self.medidor.leer_registros():
                 self.lbl_status.setText("✅ Lectura inicial exitosa")
         except Exception as e:
+            # APORTACIÓN 2: Evitar error silencioso enviando al notificador
+            self.error_handler.log_error("007", f"Error en lectura inicial de prueba: {str(e)}", es_error_sistema=True)
             self.lbl_status.setText(f"⚠️ Error en lectura: {str(e)}")
             self.lbl_status.setStyleSheet("color: #E67E22;")
 

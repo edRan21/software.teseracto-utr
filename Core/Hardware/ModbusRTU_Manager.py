@@ -212,16 +212,19 @@ class MedidorAguaBase(IMedidorAgua):
         self._consecutive_errors += 1
         self._is_connected = False
         
-        # AUMENTAR TIMEOUT ADAPTATIVAMENTE
         if self._consecutive_errors > 2:
-            self._adaptive_timeout = min(10.0, self._adaptive_timeout * 1.5)  # Máximo 10 segundos
+            self._adaptive_timeout = min(10.0, self._adaptive_timeout * 1.5) 
             
-        error_msg = f"Error conexión (intento {self._consecutive_errors}): {error}"
+        # APORTACIÓN 1: Separamos el log interno del visual para no romper el filtro Anti-Spam
+        log_msg = f"Error conexión (intento {self._consecutive_errors}): {error}"
+        
         if self._consecutive_errors >= self._max_consecutive_errors:
-            self.error_handler.log_error("005", f"CONEXIÓN FALLIDA: {error_msg}")
-            self.logger.error(f"Timeout adaptativo aumentado a: {self._adaptive_timeout:.2f}s")
+            # Mensaje estático para la interfaz visual
+            tipo_error = type(error).__name__ if error else "Desconocido"
+            self.error_handler.log_error("005", f"CONEXIÓN FALLIDA: {tipo_error}", es_error_sistema=True)
+            self.logger.error(f"{log_msg} | Timeout adaptativo aumentado a: {self._adaptive_timeout:.2f}s")
         else:
-            self.logger.warning(error_msg)
+            self.logger.warning(log_msg)
 
     # leer_registros_seguro() - IMPLEMENTACIÓN COMPLETA
     def leer_registros_seguro(self, timeout: float = None) -> Dict[str, RegisterValue]:
@@ -290,15 +293,15 @@ class MedidorAguaBase(IMedidorAgua):
                     if time.time() - start_time > self._adaptive_timeout * 2:
                         self.logger.warning("Timeout global excedido, cancelando lecturas restantes")
                         break
-                        
                     try:
                         resultados[reg_name] = self._leer_registro(reg_name)
                     except ModbusException as e:
-                        self.error_handler.log_error("021", f"Error registro {reg_name}: {e}")
+                        # APORTACIÓN 1: Simplificar la excepción para el filtro anti-spam
+                        self.error_handler.log_error("007", f"Error de lectura en registro: {reg_name}", es_error_sistema=True)
                         resultados[reg_name] = None
                         self._consecutive_errors += 1
                     except Exception as e:
-                        self.error_handler.log_error("022", f"Error decodificación {reg_name}: {e}")
+                        self.error_handler.log_error("007", f"Error decodificando registro: {reg_name}", es_error_sistema=True)
                         resultados[reg_name] = None
                         self._consecutive_errors += 1
 
@@ -461,7 +464,7 @@ class MedidorAguaBase(IMedidorAgua):
     def obtener_unidad_flujo(self) -> str:
         """Obtiene la unidad de flujo con caché para mejor rendimiento"""
         ahora = time.time()
-        if ahora - self._ultima_lectura_unidad > 60:  # Actualizar cada minuto
+        if ahora - self._ultima_lectura_unidad > 60:
             try:
                 registro = self._leer_registro("unidad_flujo")
                 unidades = {
@@ -472,7 +475,8 @@ class MedidorAguaBase(IMedidorAgua):
                 self._unidad_flujo_cache = unidades.get(registro, "m³/h")
                 self._ultima_lectura_unidad = ahora
             except Exception as e:
-                self.error_handler.log_error("UNIDAD_FLUJO", f"Error leyendo unidad: {e}")
+                # APORTACIÓN 2: Cambio de "UNIDAD_FLUJO" por "007"
+                self.error_handler.log_error("007", "Error leyendo unidad de flujo", es_error_sistema=True)
         return self._unidad_flujo_cache
 
     def desconectar(self):

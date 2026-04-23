@@ -112,31 +112,23 @@ class FTPManager(IFileTransfer):
     def _crear_directorios_remotos(self, remote_dir: str):
         """Crea directorios remotos con manejo robusto"""
         try:
-            # Verificar conexión
             self.connection.voidcmd("NOOP")
-            
-            # Normalizar ruta
             remote_dir = self._normalizar_ruta_remota(remote_dir)
             
-            # Si es solo /, ya estamos en raíz
             if remote_dir == "/":
                 self.logger.info("✅ Ya en directorio raíz")
                 return
             
-            # Ir a raíz primero
             try:
                 self.connection.cwd("/")
             except Exception as e:
                 self.logger.warning(f"⚠️ No se pudo ir a raíz: {e}")
-                # Continuar de todos modos
             
-            # Crear estructura de directorios
             segments = [s for s in remote_dir.strip("/").split("/") if s]
             current_path = ""
             
             for segment in segments:
                 current_path = f"{current_path}/{segment}" if current_path else segment
-                
                 try:
                     self.logger.debug(f"Intentando cambiar a: {current_path}")
                     self.connection.cwd(current_path)
@@ -147,9 +139,8 @@ class FTPManager(IFileTransfer):
                         self.connection.cwd(current_path)
                     except ftplib.error_perm as e:
                         error_msg = str(e)
-                        if "550" in error_msg:  # Directorio ya existe
+                        if "550" in error_msg: 
                             self.logger.debug(f"Directorio ya existe: {current_path}")
-                            # Intentar cambiarlo de nuevo
                             try:
                                 self.connection.cwd(current_path)
                             except:
@@ -161,7 +152,9 @@ class FTPManager(IFileTransfer):
             self.logger.info(f"✅ Directorios creados/verificados: {remote_dir}")
             
         except Exception as e:
-            self.error_handler.log_error("FTP-MKDIR", f"Error creando directorios: {e}")
+            # APORTACIÓN 2: Cambio a código oficial y protección Anti-Spam
+            self.error_handler.log_error("FTP-DIRECTORY", "Fallo al crear estructura de directorios en servidor", es_error_sistema=True)
+            self.logger.error(f"Error detallado MKDIR: {e}")
             raise
     
     def _validar_formato_conagua(self, local_path: str) -> bool:
@@ -171,20 +164,20 @@ class FTPManager(IFileTransfer):
             
             with open(local_path, 'r', encoding='utf-8') as f:
                 primera_linea = f.readline().strip()
-                
                 self.logger.debug(f"📄 Validando {filename}: '{primera_linea[:50]}...'")
                 
                 if not primera_linea.startswith(("M|", "QA|")):
                     self.logger.error(f"❌ Formato inválido en {filename}: No empieza con M| o QA|")
-                    self.error_handler.log_error("FTP-FORMAT", 
-                        f"Archivo {filename} no cumple formato: {primera_linea[:50]}")
+                    # APORTACIÓN 3: Eliminar 'primera_linea' del visual para que no evada el Anti-Spam
+                    self.error_handler.log_error("FTP-FORMAT", f"Archivo no cumple formato CONAGUA: {filename}", es_error_sistema=True)
                     return False
                 
                 self.logger.debug(f"✅ Formato válido para {filename}")
                 return True
                 
         except Exception as e:
-            self.error_handler.log_error("FTP-FORMAT", f"Error validando {local_path}: {e}")
+            self.error_handler.log_error("FTP-FORMAT", f"Error validando estructura de archivo", es_error_sistema=True)
+            self.logger.error(f"Error detallado validando {local_path}: {e}")
             return False
     
     def enviar_archivo(self, local_path: str, remote_path: str) -> bool:
@@ -299,6 +292,8 @@ class FTPManager(IFileTransfer):
                     time.sleep(2)
                     continue
         
+        # APORTACIÓN 4: Evitar el fallo silencioso notificando al usuario en la interfaz
+        self.error_handler.log_error("FTP-UPLOAD", f"FTP falló tras 3 intentos. Archivo: {filename}", es_error_sistema=True)
         self.logger.warning(f"⚠️ FTP falló después de 3 intentos: {filename}")
         return False
     

@@ -14,6 +14,10 @@ from Core.System.ConfigManager import ConfigManager
 from Core.System.StateManager import StateManager
 from Core.DataProcessing.Services import RecordFormatter, ConfigProvider, BitmaskConverter, FileNameGenerator
 from Core.Network.FTPManager import FTPManager
+from Core.Network.FTPManager import FTPManager
+# APORTACIÓN 1: Importar DataProcessor y UnitConverter
+from Core.DataProcessing.DataProcessor import DataProcessor
+from Core.DataProcessing.Services import UnitConverter
 
 
 # ============================================================================
@@ -423,7 +427,6 @@ class AccesoDialog(NIPDialog):
 # ============================================================================
 
 class FTPConaguaWindow(QWidget):
-    # Señal para indicar que la ventana se cerró
     window_closed = pyqtSignal()
     
     def __init__(self, error_handler):
@@ -432,15 +435,17 @@ class FTPConaguaWindow(QWidget):
         self._initialized = False
         self._auth_success = False
         
-        # ✅ PRIMERO: VERIFICAR AUTENTICACIÓN CON MANEJO MEJORADO
+        self.data_processor = DataProcessor(UnitConverter())
+        
+        # ✅ RESTAURACIÓN DEL CANDADO IMPENETRABLE ORIGINAL
+        # La UI no se construye hasta que el NIP sea correcto
         self._auth_success = self.verificar_autenticacion()
         
         if not self._auth_success:
-            # ✅ CORREGIDO: Cerrar completamente sin dejar ventanas residuales
             self.deleteLater()
             return
-        
-        # ✅ SEGUNDO: CONFIGURAR INTERFAZ SI AUTENTICACIÓN EXITOSA
+            
+        # Solo si pasa el NIP, construimos la ventana
         self._initialized = True
         self.setWindowTitle("Unidad de Inspección")
         self.setGeometry(100, 100, 600, 750)
@@ -451,6 +456,12 @@ class FTPConaguaWindow(QWidget):
         self.apply_dark_theme()
         self._progress_label = None
         self._progress_timer = QTimer()
+        
+    # ANCLA (PUNTO 4): Método que se llamará solo al hacer clic en la pestaña
+    def solicitar_acceso(self) -> bool:
+        if not self._auth_success:
+            self._auth_success = self.verificar_autenticacion()
+        return self._auth_success
     
     def verificar_autenticacion(self):
         """Verifica la autenticación del usuario antes de mostrar la ventana"""
@@ -478,7 +489,9 @@ class FTPConaguaWindow(QWidget):
                     return False
                     
         except Exception as e:
-            print(f"Error en autenticación: {e}")
+            # APORTACIÓN 2: Usar ErrorHandler en lugar de 'print'
+            if hasattr(self, 'error_handler') and self.error_handler:
+                self.error_handler.log_error("010", f"Error en sistema de autenticación NIP: {e}", es_error_sistema=True)
             return False
     
     def closeEvent(self, event):
@@ -783,8 +796,10 @@ class FTPConaguaWindow(QWidget):
                 )
             else:
                 raise ValueError("Tipo de reporte inválido")
-                
+  
         except Exception as e:
+            # APORTACIÓN 2: Notificar fallo de formato
+            self.error_handler.log_error("304", f"Fallo al formatear reporte Conagua: {e}", es_error_sistema=True)
             ker_code_str = str(ker_code).zfill(3)
             return f"ERR|{datetime.now().strftime('%Y%m%d|%H%M%S')}|{type(e).__name__}|{str(e)}|{ker_code_str}|{clave}"
 
@@ -803,6 +818,8 @@ class FTPConaguaWindow(QWidget):
                 return f"{base_name}_{clave}.txt"
                 
         except Exception as e:
+            # APORTACIÓN 2: Notificar fallo en nombre de archivo
+            self.error_handler.log_error("305", f"Fallo generando nombre para archivo Conagua: {e}", es_error_sistema=True)
             fecha = datetime.now().strftime("%Y%m%d")
             return f"reporte_conagua_{fecha}_{clave}.txt"
 
@@ -845,11 +862,14 @@ class FTPConaguaWindow(QWidget):
                 if intento > 0:
                     self.mostrar_progreso(f"Intento {intento+1}/{max_intentos}...")
                 
-                datos = medidor.leer_registros()
+                datos_crudos = medidor.leer_registros()
                 
-                if datos:
-                    flujo_inst = datos.get("flujo_instantaneo", 0.0)
-                    flujo_acum = datos.get("flujo_acumulado", 0.0)
+                if datos_crudos:
+                    # APORTACIÓN 1: Convertir valores crudos a unidades correctas
+                    datos_procesados = self.data_processor.process(datos_crudos, medidor.perfil)
+                    
+                    flujo_inst = datos_procesados.get("flujo_instantaneo", 0.0)
+                    flujo_acum = datos_procesados.get("flujo_acumulado", 0.0)
                     
                     try:
                         flujo_inst = float(flujo_inst) if flujo_inst is not None else 0.0
@@ -987,8 +1007,9 @@ class FTPConaguaWindow(QWidget):
             with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(self.current_content)
         except Exception as e:
-            QMessageBox.warning(self, "Error", 
-                            f"No se pudo crear el archivo temporal: {str(e)}")
+            # APORTACIÓN 2: Registrar error temporal
+            self.error_handler.log_error("305", f"No se pudo crear archivo temporal FTP: {e}", es_error_sistema=True)
+            QMessageBox.warning(self, "Error", f"No se pudo crear el archivo temporal: {str(e)}")
             return
 
         # Enviar via FTP
@@ -998,19 +1019,23 @@ class FTPConaguaWindow(QWidget):
                 "host": host,
                 "usuario": user,
                 "clave": password,
-                "port": int(port) if port else 21,
+                "puerto": int(port) if port else 21,  # APORTACIÓN 3: Cambiado "port" a "puerto"
                 "ruta_remota": remote_path
             }
             ftp_manager = FTPManager(ftp_config, self.error_handler)
             remote_filename = os.path.join(remote_path, self.current_filename) if remote_path else self.current_filename
+            
             success = ftp_manager.enviar_archivo(temp_path, remote_filename)
+            
             if success:
                 QMessageBox.information(self, "Éxito", "Reporte enviado correctamente al servidor FTP.")
+                self.error_handler.log_evento("Reporte Unidad de Inspección enviado con éxito a CONAGUA", "200")
             else:
                 QMessageBox.warning(self, "Error", "No se pudo enviar el reporte. Verifique la conexión.")
         except Exception as e:
-            QMessageBox.warning(self, "Error", 
-                            f"Error al enviar el reporte: {str(e)}")
+            # APORTACIÓN 2: Registrar excepción crítica FTP
+            self.error_handler.log_error("FTP-UPLOAD", f"Excepción crítica al enviar reporte: {e}", es_error_sistema=True)
+            QMessageBox.warning(self, "Error", f"Error al enviar el reporte: {str(e)}")
         finally:
             # Eliminar archivo temporal
             try:

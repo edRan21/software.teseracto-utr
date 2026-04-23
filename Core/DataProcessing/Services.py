@@ -61,18 +61,17 @@ class UnitConverter(IUnitConverter):
         raise ValueError(f"Conversión no soportada: {from_unit}→{to_unit}")
 
 class FileNameGenerator(IFileNameGenerator):
-    def __init__(self, config_provider: IConfigProvider):
+    # APORTACIÓN 2: Añadimos ErrorHandler al constructor
+    def __init__(self, config_provider: IConfigProvider, error_handler=None):
         self.config_provider = config_provider
+        self.error_handler = error_handler
     
-    # 1. Implementación del método abstracto REQUERIDO
     def generate(self, tipo_registro: str, fecha_en_nombre: bool = True) -> str:
-        """Método de compatibilidad (no usado en nuevo diseño)"""
         if fecha_en_nombre:
             return self.generate_daily_name(tipo_registro)
         return self.generate_historic_name(tipo_registro)
     
     def generate_historic_name(self, tipo_registro: str) -> str:
-        """Nombre para archivo histórico acumulativo (SIN FECHA)"""
         try:
             config = self.config_provider.get_config()
             if tipo_registro == "Medidor":
@@ -80,11 +79,13 @@ class FileNameGenerator(IFileNameGenerator):
             elif tipo_registro == "SistemaMedicion":
                 return f"{config['RFC']}_{config['NSUT']}.txt"
         except Exception as e:
-            logging.error(f"Error nombre histórico: {e}")
+            # APORTACIÓN 2: Alerta visual Código 305
+            if self.error_handler:
+                self.error_handler.log_error("305", "No se pudo generar nombre del archivo histórico", es_error_sistema=True)
+            logging.error(f"Error detallado nombre histórico: {e}")
             return "historico_mediciones.txt"
 
     def generate_daily_name(self, tipo_registro: str) -> str:
-        """Nombre para archivo diario de envío (CON FECHA)"""
         try:
             config = self.config_provider.get_config()
             fecha = datetime.now().strftime("%Y%m%d")
@@ -93,13 +94,18 @@ class FileNameGenerator(IFileNameGenerator):
             elif tipo_registro == "SistemaMedicion":
                 return f"{config['RFC']}_{fecha}_{config['NSUT']}.txt"
         except Exception as e:
-            logging.error(f"Error nombre diario: {e}")
+            # APORTACIÓN 2: Alerta visual Código 305
+            if self.error_handler:
+                self.error_handler.log_error("305", "No se pudo generar nombre del archivo diario", es_error_sistema=True)
+            logging.error(f"Error detallado nombre diario: {e}")
             return f"reporte_{datetime.now().strftime('%Y%m%d')}.txt"
 
 class RecordFormatter(IRecordFormatter):
-    def __init__(self, config_provider: IConfigProvider, bitmask_converter: IBitmaskConverter):
+    # APORTACIÓN 3: Añadimos ErrorHandler al constructor
+    def __init__(self, config_provider: IConfigProvider, bitmask_converter: IBitmaskConverter, error_handler=None):
         self.config_provider = config_provider
         self.bitmask_converter = bitmask_converter
+        self.error_handler = error_handler
 
     def format(self, tipo_registro: str, datos_sensor: dict, perfil_sensor: dict, ker_code: str = "000") -> str:
         try:
@@ -109,11 +115,9 @@ class RecordFormatter(IRecordFormatter):
             hora = now.strftime("%H%M%S")
             mapa = perfil_sensor.get("output_mapping", {})
             
-            # BÚSQUEDA ROBUSTA SIN LOGGING
             flujo_inst = self._buscar_valor_robusto(datos_sensor, mapa.get("flujo_instantaneo"), "flujo_instantaneo")
             flujo_acum = self._buscar_valor_robusto(datos_sensor, mapa.get("flujo_acumulado"), "flujo_acumulado")
             
-            # Asegurar que ker_code tenga 3 dígitos
             ker_code_str = str(ker_code).zfill(3)
                 
             if tipo_registro == "Medidor":
@@ -129,7 +133,10 @@ class RecordFormatter(IRecordFormatter):
             else:
                 raise ValueError("Tipo de registro inválido")
         except Exception as e:
-            # Incluir el código KER incluso en errores
+            # APORTACIÓN 3: Alerta visual Código 304
+            if self.error_handler:
+                self.error_handler.log_error("304", "Fallo al estructurar el formato de reporte", es_error_sistema=True)
+                
             ker_code_str = str(ker_code).zfill(3)
             return f"ERR|{datetime.now().strftime('%Y%m%d|%H%M%S')}|{type(e).__name__}|{str(e)}|{ker_code_str}"
     

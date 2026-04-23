@@ -35,7 +35,7 @@ exe = EXE(
     a.binaries,
     a.zipfiles,
     a.datas,
-    name='TESERACTO-UTR',
+    name='TESSERACTO-UTR',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

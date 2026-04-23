@@ -17,7 +17,7 @@ class ConfigManager:
     
     # ✅ CONSTANTES PARA NIPs POR DEFECTO
     NIP_TESERACTO_DEFAULT = "1974"
-    NIP_GENERICO_DEFAULT = "1111"
+    NIP_GENERICO_DEFAULT = ""
 
     @staticmethod
     def _validar_unidad(unidad: str):
@@ -287,23 +287,111 @@ class ConfigManager:
 
     @classmethod
     def guardar_config_login(cls, config: Dict[str, Any]) -> None:
+        """Guarda la configuración de login soportando la nueva estructura RBAC"""
         if "contraseña_maestra" in config and not config["contraseña_maestra"].startswith("$pbkdf2-sha256$"):
             config["contraseña_maestra"] = pbkdf2_sha256.hash(config["contraseña_maestra"], salt_size=16)
+            
         if "usuarios" in config:
-            for user, pwd in config["usuarios"].items():
-                if not pwd.startswith("$pbkdf2-sha256$"):
-                    config["usuarios"][user] = pbkdf2_sha256.hash(pwd, salt_size=16)
+            for user, data in config["usuarios"].items():
+                # Compatibilidad con formato viejo (solo string)
+                if isinstance(data, str):
+                    if not data.startswith("$pbkdf2-sha256$"):
+                        config["usuarios"][user] = pbkdf2_sha256.hash(data, salt_size=16)
+                # Nuevo formato RBAC (diccionario con hash y rol)
+                elif isinstance(data, dict) and "hash" in data:
+                    if not data["hash"].startswith("$pbkdf2-sha256$"):
+                        data["hash"] = pbkdf2_sha256.hash(data["hash"], salt_size=16)
+
         config_path = path_manager.get_config_path("login_config.json")
         cls._guardar_archivo(config_path, config)
         cls._cache.pop('login', None)
 
     @classmethod
     def validar_credenciales(cls, usuario: str, contraseña: str) -> bool:
+        """Verifica credenciales soportando la estructura RBAC"""
         cfg = cls.cargar_config_login()
+        
+        # Validar contraseña maestra (permite el acceso general)
         if pbkdf2_sha256.verify(contraseña, cfg.get("contraseña_maestra", "")):
             return True
-        hash_user = cfg.get("usuarios", {}).get(usuario, "")
+            
+        user_data = cfg.get("usuarios", {}).get(usuario, "")
+        
+        # Extraer el hash dependiendo de si es diccionario (nuevo) o string (viejo)
+        hash_user = user_data.get("hash", "") if isinstance(user_data, dict) else user_data
+            
         return bool(hash_user and pbkdf2_sha256.verify(contraseña, hash_user))
+
+    # =================================================================
+    # NUEVOS MÉTODOS DE SEGURIDAD Y GESTIÓN DE USUARIOS (RBAC)
+    # =================================================================
+
+    @classmethod
+    def obtener_rol_usuario(cls, usuario: str) -> str:
+        """Devuelve el rol del usuario ('admin' u 'operador')"""
+        cfg = cls.cargar_config_login()
+        usuarios = cfg.get("usuarios", {})
+        
+        if usuario in usuarios:
+            user_data = usuarios[usuario]
+            if isinstance(user_data, dict):
+                return user_data.get("rol", "operador")
+            else:
+                return "admin" if usuario.lower() == "admin" else "operador"
+        return "operador"
+
+    @classmethod
+    def validar_password_maestra(cls, password: str) -> bool:
+        """Verifica si la contraseña ingresada es estrictamente la MAESTRA"""
+        cfg = cls.cargar_config_login()
+        hash_maestro = cfg.get("contraseña_maestra", "")
+        try:
+            return bool(hash_maestro and pbkdf2_sha256.verify(password, hash_maestro))
+        except Exception:
+            return False
+
+    @classmethod
+    def crear_usuario(cls, usuario: str, password: str, rol: str = "operador") -> bool:
+        """Crea un nuevo usuario o actualiza su contraseña y rol"""
+        cfg = cls.cargar_config_login()
+        if "usuarios" not in cfg:
+            cfg["usuarios"] = {}
+            
+        hash_nuevo = pbkdf2_sha256.hash(password, salt_size=16)
+        cfg["usuarios"][usuario] = {
+            "hash": hash_nuevo,
+            "rol": rol
+        }
+        cls.guardar_config_login(cfg)
+        logger.info(f"Usuario '{usuario}' configurado con rol '{rol}'")
+        return True
+
+    @classmethod
+    def eliminar_usuario(cls, usuario: str) -> bool:
+        """Elimina un usuario (protege al 'admin' por seguridad)"""
+        if usuario.lower() == "admin":
+            return False
+            
+        cfg = cls.cargar_config_login()
+        if "usuarios" in cfg and usuario in cfg["usuarios"]:
+            del cfg["usuarios"][usuario]
+            cls.guardar_config_login(cfg)
+            logger.info(f"Usuario '{usuario}' eliminado del sistema")
+            return True
+        return False
+        
+    @classmethod
+    def obtener_lista_usuarios(cls) -> List[Dict[str, str]]:
+        """Retorna todos los usuarios y sus roles para la interfaz gráfica"""
+        cfg = cls.cargar_config_login()
+        usuarios = cfg.get("usuarios", {})
+        lista = []
+        
+        for user, data in usuarios.items():
+            rol = data.get("rol", "operador") if isinstance(data, dict) else ("admin" if user.lower() == "admin" else "operador")
+            lista.append({"usuario": user, "rol": rol})
+            
+        return lista
 
     @classmethod
     def cargar_config_sensor(cls) -> Dict[str, Any]:

@@ -4,7 +4,6 @@ import requests
 import time 
 from Core.System.ErrorHandler import ErrorHandler
 
-
 class InternetManager:
     """Gestiona la verificación de conectividad a internet."""
     
@@ -28,13 +27,16 @@ class InternetManager:
                     return True
             except:
                 continue
-        self.error_handler.log_evento("NET-001", "Sin conexión a internet")
+                
+        # APORTACIÓN 1: Uso de log_error y código oficial "001"
+        self.error_handler.log_error("001", "Pérdida de conexión a internet detectada", es_error_sistema=True)
         return False
         
     def wait_for_connection(self, max_retries=10, base_delay=3) -> bool:
         """Espera hasta que se restaure la conexión."""
         for intento in range(max_retries):
             if self.is_connected():
+                # Opcional: Notificar que regresó el internet si queremos
                 return True
             delay = base_delay * (2 ** intento)
             time.sleep(min(delay, 60))  # Máximo 60s entre reintentos

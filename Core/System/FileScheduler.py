@@ -63,7 +63,9 @@ class FileScheduler:
                     return json.load(f)
             return None
         except Exception as e:
-            self.error_handler.log_error("EMAIL-CONFIG", f"Error: {e}")
+            # APORTACIÓN 3: Uso de código oficial en lugar de "EMAIL-CONFIG"
+            self.error_handler.log_error("301", "Error cargando configuración de Email", es_error_sistema=True)
+            self.logger.error(f"Error detallado config email: {e}")
             return None
 
     def _actualizar_config_email(self, nueva_config: Dict[str, Any]):
@@ -102,7 +104,9 @@ class FileScheduler:
             os.makedirs(pendientes_dir, exist_ok=True)
             
         except Exception as e:
-            self.error_handler.log_error("DIR-STRUCT", f"Error: {e}")
+            # APORTACIÓN 3: Uso de código oficial en lugar de "DIR-STRUCT"
+            self.error_handler.log_error("010", "Fallo al verificar estructura de directorios del sistema", es_error_sistema=True)
+            self.logger.error(f"Error detallado directorios: {e}")
     
     def _crear_respaldo_seguro(self, ruta_archivo: str) -> bool:
         """Crea respaldo antes de eliminar - GARANTÍA DE NO PÉRDIDA"""
@@ -261,7 +265,8 @@ class FileScheduler:
                     time.sleep(2)
                     continue
         
-        self.error_handler.log_error("EMAIL-FAILED", f"Fallo email {filename}")
+        # APORTACIÓN 3: Uso de código oficial en lugar de "EMAIL-FAILED"
+        self.error_handler.log_error("EMAIL-TEST", "Fallo definitivo al enviar reporte por correo", es_error_sistema=True)
         return False
     
     def _procesar_archivo_individual(self, ruta_archivo: str) -> bool:
@@ -354,10 +359,7 @@ class FileScheduler:
         except Exception as e:
             error_msg = f"Error procesando {filename}: {type(e).__name__}: {str(e)}"
             
-            # Determinar si es un error transitorio (no contar en fallos consecutivos)
             error_str = str(e).lower()
-            
-            # Errores transitorios (red, timeout, conexión)
             errores_transitorios = [
                 'timeout', 'connection', 'socket', 'reset', '10054',
                 'cannot read from timed out', 'timed out', 'oserror'
@@ -367,10 +369,10 @@ class FileScheduler:
             
             if es_transitorio:
                 self.logger.warning(f"⚠️ Error transitorio en {filename}: {error_msg}")
-                # No incrementar fallos consecutivos para errores transitorios
             else:
                 self.logger.error(f"❌ Error crítico en {filename}: {error_msg}")
-                self.error_handler.log_error("PROCESAR-ARCHIVO", error_msg)
+                # APORTACIÓN 3 y 4: Uso de código oficial y estandarización de mensaje para Anti-Spam
+                self.error_handler.log_error("305", "Fallo crítico al procesar archivo de reporte", es_error_sistema=True)
                 self._consecutive_failures += 1
             
             return False
@@ -419,7 +421,7 @@ class FileScheduler:
                         else:
                             fallidos += 1
                     except Exception as e:
-                        self.error_handler.log_error("ENVIO-PARALLEL", f"Error: {e}")
+                        self.error_handler.log_error("010", f"Error: {e}")
                         fallidos += 1
             
             # Resultado
@@ -435,7 +437,7 @@ class FileScheduler:
             self._guardar_log_envio(start_time, exitosos, fallidos, elapsed)
             
         except Exception as e:
-            self.error_handler.log_error("ENVIO-AUTOMATICO", f"Error: {e}")
+            self.error_handler.log_error("010", f"Error: {e}")
     
     def _guardar_log_envio(self, inicio: datetime, exitosos: int, fallidos: int, tiempo: float):
         """Guarda log del envío"""
@@ -491,7 +493,7 @@ class FileScheduler:
                 self.logger.info(f"📧 Reintento emails: {exitosos}/{reintentados} exitosos")
                 
         except Exception as e:
-            self.error_handler.log_error("REINTENTO-EMAILS", f"Error: {e}")
+            self.error_handler.log_error("010", f"Error: {e}")
     
     def _limpiar_archivos_antiguos(self):
         """Limpia archivos antiguos"""
@@ -522,7 +524,7 @@ class FileScheduler:
                 self.logger.info(f"🧹 Limpieza: {eliminados} archivos eliminados")
                 
         except Exception as e:
-            self.error_handler.log_error("LIMPIAR-ARCHIVOS", f"Error: {e}")
+            self.error_handler.log_error("010", f"Error: {e}")
     
     def actualizar_hora_envio(self, nueva_hora: str):
         """Actualiza hora de envío"""
@@ -543,7 +545,7 @@ class FileScheduler:
                 return True
                 
             except Exception as e:
-                self.error_handler.log_error("ACTUALIZAR-HORA", f"Error: {e}")
+                self.error_handler.log_error("301", f"Error: {e}")
                 return False
     
     def iniciar(self):
@@ -605,7 +607,7 @@ class FileScheduler:
                 self.logger.info(f"✅ Scheduler iniciado - Envío a las {hora:02d}:{minuto:02d}")
                 
             except Exception as e:
-                self.error_handler.log_error("INICIAR-SCHEDULER", f"Error: {e}")
+                self.error_handler.log_error("010", f"Error: {e}")
                 self._is_running = False
     
     def detener(self):
@@ -617,7 +619,7 @@ class FileScheduler:
                     self._is_running = False
                     self.logger.info("⏹️ Scheduler detenido")
             except Exception as e:
-                self.error_handler.log_error("DETENER-SCHEDULER", f"Error: {e}")
+                self.error_handler.log_error("010", f"Error: {e}")
     
     def forzar_envio_inmediato(self) -> Dict[str, Any]:
         """Fuerza envío inmediato"""
@@ -646,6 +648,6 @@ class FileScheduler:
             
         except Exception as e:
             resultado["mensaje"] = f"Error: {str(e)}"
-            self.error_handler.log_error("ENVIO-INMEDIATO", resultado["mensaje"])
+            self.error_handler.log_error("010", resultado["mensaje"])
         
         return resultado

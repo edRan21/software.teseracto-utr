@@ -8,8 +8,10 @@ from Core.System.StateManager import StateManager
 class SettingsWindow(QWidget):
     config_updated = pyqtSignal()
     
-    def __init__(self):
+    # APORTACIÓN 1: Inyectar error_handler
+    def __init__(self, error_handler=None):
         super().__init__()
+        self.error_handler = error_handler
         self.setWindowTitle("Configuración del Sistema")
         self.setup_ui()
         self.load_current_config()
@@ -145,6 +147,9 @@ class SettingsWindow(QWidget):
             self.time_edit.setTime(QTime(hora, minuto))
             
         except Exception as e:
+            # APORTACIÓN 2: Registrar error de carga
+            if hasattr(self, 'error_handler') and self.error_handler:
+                self.error_handler.log_error("CONFIG-LOAD", f"Error cargando configuración general: {e}", es_error_sistema=True)
             QMessageBox.warning(self, "Error", f"No se pudo cargar la configuración: {e}")
     
     def save_config(self):
@@ -184,7 +189,15 @@ class SettingsWindow(QWidget):
             StateManager.set_ready("settings")
             QMessageBox.information(self, "Éxito", "Configuración guardada correctamente")
             self.close()
+            
         except ValueError as e:
+            # Error de validación por parte del usuario
+            if hasattr(self, 'error_handler') and self.error_handler:
+                self.error_handler.log_error("301", f"Error de validación en configuración: {str(e)}", es_error_sistema=True)
             QMessageBox.critical(self, "Error de Validación", str(e))
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error al guardar la configuración: {e}")
+            # Error crítico al guardar el archivo JSON
+            if hasattr(self, 'error_handler') and self.error_handler:
+                self.error_handler.log_error("CONFIG-SAVE", f"Fallo crítico guardando configuración general: {str(e)}", es_error_sistema=True)
+            QMessageBox.critical(self, "Error al Guardar", f"Error inesperado: {str(e)}")
