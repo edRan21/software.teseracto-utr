@@ -50,3 +50,8 @@ pyinstaller TESSERACTO-UTR.spec
 ```
 
 <p>Hacemos uso de la librería de pyinstaller para compilar y generar un ejecutable, <b>es importante que copies manualmente las images y los archivos de configuración .JSON a las carpetas que le corresponden ya que el sistema se quejará si no encuentra estos recursos para inicializar</b></p>
+
+>[!WARNING]
+> Al ejecutar el siguiente comando recordar que este se encarga de tomar todas la librerias instaladas y utilizadas en tu entorno local o en tu entorno virtual y crear un archivo con el que python podra utilizar para instalar de un solo golpe todas las bibliotecas del proyecto, CUIDADO, si tienes alguna otra libreria que no este siendo utilizada por el proyecto puede que el comando lo agregue en el archivo requirements.txt (ESTE Y TODOS LOS ANTERIORES COMANDOS DEBEN SER ESTUDIADOS PARA SU COMPRESIÓN):
+>
+> pip freeze > requirements.txt
