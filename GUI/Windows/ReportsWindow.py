@@ -249,8 +249,8 @@ class ReportsWindow(QWidget):
             with open(ruta_temp, 'w', encoding='utf-8') as f:
                 f.write(contenido)
             
-            # El renombrado es atómico: el archivo aparece en la carpeta solo cuando está 100% escrito
-            os.rename(ruta_temp, ruta_diario)
+            # os.replace es atómico y sobrescribe si el archivo ya existe (Evita WinError 183)
+            os.replace(ruta_temp, ruta_diario)
                 
         except Exception as e:
             self.error_handler.log_error("304", f"ERROR CRÍTICO generando reporte diario: {str(e)}", es_error_sistema=True)
