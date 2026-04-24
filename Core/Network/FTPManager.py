@@ -181,63 +181,127 @@ class FTPManager(IFileTransfer):
             return False
     
     def enviar_archivo(self, local_path: str, remote_path: str) -> bool:
-        """Sube el archivo y verifica estrictamente que exista en el servidor remoto."""
+        """Envía archivo con reintentos y manejo diferenciado de errores"""
         if not os.path.exists(local_path):
-            self.logger.error(f"Archivo local no encontrado: {local_path}")
+            self.logger.error(f"❌ Archivo no existe: {local_path}")
             return False
-            
-        try:
-            if not self.connection:
-                if not self.conectar():
-                    return False
-                    
-            filename = os.path.basename(local_path)
-            remote_dir = os.path.dirname(remote_path)
-            
-            # Crear y entrar al directorio remoto si es necesario
-            if remote_dir and remote_dir != "/":
-                self._asegurar_directorio_remoto(remote_dir)
-                try:
-                    self.connection.cwd(remote_dir)
-                except Exception as e:
-                    self.logger.error(f"No se pudo acceder a la ruta remota: {e}")
-                    return False
-            
-            remote_filename = os.path.basename(remote_path)
-            
-            # Subir el archivo
-            with open(local_path, "rb") as file:
-                self.connection.storbinary(f"STOR {remote_filename}", file)
-            
-            # ✅ VERIFICACIÓN ESTRICTA: Leer el servidor y comprobar que exista
+        
+        filename = os.path.basename(local_path)
+        
+        # 1. Validar formato
+        if not self._validar_formato_conagua(local_path):
+            self.logger.error(f"❌ Validación fallida para {filename}")
+            return False
+        
+        # 2. Normalizar ruta remota
+        remote_path = self._normalizar_ruta_remota(remote_path)
+        
+        # 3. Reintentos con manejo específico de errores
+        for attempt in range(3):
             try:
-                archivos_en_servidor = self.connection.nlst()
-                if remote_filename not in archivos_en_servidor:
-                    self.logger.error("El servidor aceptó la orden, pero el archivo no existe en el listado.")
+                self.logger.info(f"📤 Intento {attempt + 1}/3: {filename}")
+                
+                # ✅ CORRECCIÓN: Uso del método de conexión real de tu clase
+                if not self._establecer_conexion_robusta():
+                    self.logger.warning(f"🔄 Falló conexión en intento {attempt + 1}, reintentando...")
+                    if attempt < 2:
+                        time.sleep(2)
+                        continue
                     return False
-            except Exception as verif_err:
-                self.logger.warning(f"No se pudo listar el directorio para verificar: {verif_err}")
-                # Si el servidor bloquea el comando NLST, intentamos usar el tamaño (SIZE)
+                
+                # Directorios remotos
+                remote_dir = os.path.dirname(remote_path)
+                if remote_dir:
+                    try:
+                        self._crear_directorios_remotos(remote_dir)
+                        remote_dir_normalized = self._normalizar_ruta_remota(remote_dir)
+                        self.connection.cwd(remote_dir_normalized)
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ Error con directorios: {e}")
+                        if attempt < 2:
+                            self._cerrar_conexion()
+                            time.sleep(2)
+                            continue
+                        self._cerrar_conexion()
+                        return False
+                
+                # Enviar archivo
+                remote_filename = os.path.basename(remote_path)
+                with open(local_path, "rb") as file:
+                    self.connection.storbinary(f"STOR {remote_filename}", file)
+                
+                # ✅ VERIFICACIÓN ESTRICTA DE EXISTENCIA
                 try:
                     self.connection.sendcmd("TYPE I")
-                    size = self.connection.size(remote_filename)
-                    if size != os.path.getsize(local_path):
-                        return False
+                    # Intento 1: Verificar por tamaño
+                    t_remoto = self.connection.size(remote_filename)
+                    t_local = os.path.getsize(local_path)
+                    if t_remoto != t_local:
+                        raise Exception("Discrepancia de tamaño detectada")
                 except:
-                    # Si bloquea ambos, lo damos por bueno asumiendo políticas de seguridad estrictas,
-                    # pero esto es rarísimo.
-                    pass
+                    # Intento 2: Verificar por listado de directorio
+                    try:
+                        archivos_en_servidor = self.connection.nlst()
+                        if remote_filename not in archivos_en_servidor:
+                            self.error_handler.log_error("FTP-UPLOAD", f"Archivo no hallado en servidor tras subida: {filename}", es_error_sistema=True)
+                            self._cerrar_conexion()
+                            return False
+                    except Exception as verif_err:
+                        self.logger.warning(f"No se pudo verificar listado: {verif_err}")
 
-            self.logger.info(f"✅ Archivo verificado en servidor: {remote_filename}")
-            self._cerrar_conexion()
-            return True
+                self.logger.info(f"🎉 Verificación OK: {filename} confirmado en servidor.")
+                self._cerrar_conexion()
+                return True
+                
+            except (socket.timeout, TimeoutError) as e:
+                self.logger.warning(f"⏰ Timeout en intento {attempt + 1}: {e}")
+                self._cerrar_conexion()
+                if attempt < 2:
+                    time.sleep(3)
+                    continue
             
-        except Exception as e:
-            self.logger.error(f"Excepción subiendo archivo FTP: {e}")
-            if hasattr(self, 'error_handler') and self.error_handler:
-                self.error_handler.log_error("FTP-UPLOAD", f"Fallo en subida: {str(e)}", es_error_sistema=True)
-            self._cerrar_conexion()
-            return False
+            except ConnectionResetError as e:
+                self.logger.warning(f"🔄 Conexión reiniciada por servidor en intento {attempt + 1}")
+                self._cerrar_conexion()
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+            
+            except (ftplib.error_temp, ConnectionRefusedError) as e:
+                self.logger.warning(f"🌡️ Error temporal FTP en intento {attempt + 1}: {e}")
+                self._cerrar_conexion()
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+            
+            except ftplib.error_perm as e:
+                error_msg = str(e)
+                self.logger.error(f"❌ Error de permisos FTP: {error_msg}")
+                self._cerrar_conexion()
+                return False  # No reintentar errores de permisos
+            
+            except OSError as e:
+                if "cannot read from timed out object" in str(e):
+                    self.logger.warning(f"⏰ Timeout de lectura en intento {attempt + 1}")
+                    self._cerrar_conexion()
+                    if attempt < 2:
+                        time.sleep(2)
+                        continue
+                else:
+                    self.logger.error(f"❌ Error OS: {e}")
+                    self._cerrar_conexion()
+                    return False
+            
+            except Exception as e:
+                self.logger.error(f"❌ Error inesperado en intento {attempt + 1}: {type(e).__name__}: {e}")
+                self._cerrar_conexion()
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+        
+        self.error_handler.log_error("FTP-UPLOAD", f"FTP falló tras 3 intentos. Archivo: {filename}", es_error_sistema=True)
+        self.logger.warning(f"⚠️ FTP falló después de 3 intentos: {filename}")
+        return False
     
     def _cerrar_conexion(self):
         """Cierra conexión FTP de forma segura"""
