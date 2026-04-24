@@ -202,6 +202,39 @@ class FileScheduler:
                 time.sleep(2)
         return False
     
+    def _guardar_log_envio_detallado(self, inicio: datetime, resultados: list, modo: str):
+        """Genera un reporte JSON detallado de la sesión de envío."""
+        try:
+            log_dir = path_manager.get_base_path() / "logs_envios"
+            log_dir.mkdir(exist_ok=True)
+            
+            timestamp = inicio.strftime('%Y%m%d_%H%M%S')
+            log_file = log_dir / f"envio_{timestamp}.json"
+            
+            log_data = {
+                "sesion_inicio": inicio.isoformat(),
+                "modo": modo,
+                "servidores": {
+                    "ftp_host": self.config.get("host", "Desconocido"),
+                    "email_activo": bool(self.email_config)
+                },
+                "detalle_archivos": resultados,
+                "resumen": {
+                    "total_procesados": len(resultados),
+                    "exitos_completos": len([r for r in resultados if r['ftp_ok'] and r['email_ok']]),
+                    "fallos_ftp": len([r for r in resultados if not r['ftp_ok']]),
+                    "fallos_email": len([r for r in resultados if not r['email_ok']])
+                }
+            }
+            
+            with open(log_file, 'w', encoding='utf-8') as f:
+                json.dump(log_data, f, indent=2, ensure_ascii=False)
+                
+            self.logger.info(f"📝 Log de envío generado: {log_file}")
+            
+        except Exception as e:
+            self.logger.error(f"Fallo crítico al intentar escribir el log: {e}")
+
     def _procesar_archivo_individual(self, ruta_archivo: str) -> bool:
         """Sube archivo mediante FTP y luego Email secuencialmente."""
         filename = os.path.basename(ruta_archivo)
@@ -239,13 +272,16 @@ class FileScheduler:
             self.logger.error(f"Excepción en {filename}: {e}")
             return False
     
-    def _ejecutar_envio_automatico(self):
-        """Procesa estrictamente en FILA INDIA."""
+    def _ejecutar_envio_automatico(self, modo="AUTOMÁTICO"):
+        """Procesa estrictamente en FILA INDIA y genera log detallado."""
         if self._is_processing:
             return
 
         with self._lock:
             self._is_processing = True
+            inicio_sesion = datetime.now()
+            resultados_sesion = []
+            
             try:
                 directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
                 if not os.path.exists(directorio):
@@ -263,17 +299,42 @@ class FileScheduler:
                 
                 exitosos = 0
                 for ruta_archivo in archivos:
+                    nombre = os.path.basename(ruta_archivo)
+                    es_pendiente_email = ruta_archivo.endswith('.email_pending')
+                    
+                    # ✅ CORRECCIÓN DE SECUENCIA: Capturamos la fecha ANTES de enviar y borrar el archivo
+                    try:
+                        fecha_archivo = datetime.fromtimestamp(os.path.getmtime(ruta_archivo)).isoformat()
+                    except OSError:
+                        fecha_archivo = datetime.now().isoformat()
+                    
+                    # Intentamos enviar el archivo (Aquí el archivo puede ser eliminado)
                     exito = self._procesar_archivo_individual(ruta_archivo)
+                    
+                    # Guardamos el resultado para el log usando la fecha pre-capturada
+                    resultados_sesion.append({
+                        "archivo": nombre,
+                        "fecha_archivo": fecha_archivo,
+                        "ftp_ok": True if es_pendiente_email else exito, 
+                        "email_ok": exito,
+                        "timestamp_envio": datetime.now().isoformat()
+                    })
+                    
                     if exito:
                         exitosos += 1
-                    elif not ruta_archivo.endswith('.email_pending'):
-                        # Si el método retornó False y NO es un pendiente de email, significa que el FTP falló.
-                        # Rompemos el ciclo (Fila India) para no seguir saturando la red.
+                    elif not es_pendiente_email:
+                        # Si falló y no era un pendiente de email, el FTP fracasó. Rompemos la fila.
                         break
+                
+                # 💡 Generar log al finalizar la sesión de procesamiento
+                if resultados_sesion:
+                    self._guardar_log_envio_detallado(inicio_sesion, resultados_sesion, modo)
                 
                 if exitosos > 0:
                     self._last_successful_run = datetime.now()
 
+            except Exception as e:
+                self.logger.error(f"Error en el ciclo de ejecución automático: {str(e)}")
             finally:
                 self._is_processing = False
     
@@ -348,17 +409,14 @@ class FileScheduler:
         try:
             start = datetime.now()
             
-            # Contar pendientes ANTES de procesar
             estado_antes = self.obtener_estado()
             pendientes_antes = estado_antes.get("archivos_pendientes", 0) + estado_antes.get("archivos_fallidos_email", 0)
             
-            self._ejecutar_envio_automatico()
+            self._ejecutar_envio_automatico(modo="MANUAL")
             
-            # Contar pendientes DESPUÉS de procesar
             estado_despues = self.obtener_estado()
             pendientes_despues = estado_despues.get("archivos_pendientes", 0) + estado_despues.get("archivos_fallidos_email", 0)
             
-            # Cálculo matemático
             exitosos_reales = pendientes_antes - pendientes_despues
             if exitosos_reales < 0: exitosos_reales = 0
             
