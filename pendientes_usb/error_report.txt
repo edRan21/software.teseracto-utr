@@ -1,0 +1,1 @@
+ERR|20260423|225128|UnboundLocalError|cannot access local variable 'pendientes_dir' where it is not associated with a value|304

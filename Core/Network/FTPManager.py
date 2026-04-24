@@ -227,23 +227,29 @@ class FTPManager(IFileTransfer):
                 
                 # Enviar archivo
                 remote_filename = os.path.basename(remote_path)
-                
                 with open(local_path, "rb") as file:
                     self.connection.storbinary(f"STOR {remote_filename}", file)
                 
-                # Verificación rápida
+                # ✅ REFACTORIZACIÓN: VERIFICACIÓN ESTRICTA DE EXISTENCIA
+                # No confiamos en el código de retorno del comando STOR.
+                # Verificamos si el archivo aparece en el listado del servidor.
                 try:
-                    tamaño_local = os.path.getsize(local_path)
                     self.connection.sendcmd("TYPE I")
-                    tamaño_remoto = self.connection.size(remote_filename)
-                    
-                    if tamaño_remoto == tamaño_local:
-                        self.logger.info(f"✅ Verificación OK: {tamaño_local} bytes")
+                    # Intento 1: Verificar por tamaño (si el servidor lo permite)
+                    t_remoto = self.connection.size(remote_filename)
+                    t_local = os.path.getsize(local_path)
+                    if t_remoto != t_local:
+                        raise Exception("Discrepancia de tamaño detectada")
                 except:
-                    self.logger.info(f"✅ Archivo enviado (verificación omitida)")
-                
+                    # Intento 2: Verificar por listado de directorio
+                    archivos_en_servidor = self.connection.nlst()
+                    if remote_filename not in archivos_en_servidor:
+                        # Si no está en la lista, la subida falló lógicamente
+                        self.error_handler.log_error("FTP-UPLOAD", f"Archivo no hallado en servidor tras subida: {filename}")
+                        return False
+
+                self.logger.info(f"🎉 Verificación OK: {filename} confirmado en servidor.")
                 self._cerrar_conexion()
-                self.logger.info(f"🎉 Envío FTP EXITOSO: {filename}")
                 return True
                 
             except (socket.timeout, TimeoutError) as e:

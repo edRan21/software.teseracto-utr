@@ -270,111 +270,41 @@ class FileScheduler:
         return False
     
     def _procesar_archivo_individual(self, ruta_archivo: str) -> bool:
-        """Procesa un archivo individual - VERSIÓN CORREGIDA SIN BUGS"""
         filename = os.path.basename(ruta_archivo)
+        self.logger.info(f"🔍 Procesando: {filename}")
         
-        # Nuevo Logging detallado
-        self.logger.info(f"🔍 INICIANDO PROCESAMIENTO para: {filename}")
-        
-        # Archivo de email pendiente
-        if filename.endswith('.email_pending'):
-            if self._enviar_email_archivo(ruta_archivo):
-                if self._crear_respaldo_seguro(ruta_archivo):
-                    try:
-                        os.remove(ruta_archivo)
-                        self.logger.info(f"✅ Email pendiente completado: {filename}")
-                        return True
-                    except Exception as e:
-                        self.logger.error(f"❌ Error eliminando {filename}: {e}")
-                return True
-            else:
-                self.logger.warning(f"⚠️ Email pendiente sigue fallando: {filename}")
-                return False
-        
-        # Archivo normal
-        try:
-            # 1. Obtener configuración
-            plantilla = self.get_plantilla(filename)
-            self.logger.debug(f"📄 Plantilla: {plantilla}")
-            
-            ruta_base = self.config.get("ruta_remota", "/").rstrip('/')
-            nombre_remoto = plantilla.get("nombre_remoto", filename)
-            
-            # CORRECCIÓN: Asegurar ruta absoluta para CONAGUA
-            # Si ruta_base no empieza con /, agregarlo
-            if not ruta_base.startswith('/'):
-                self.logger.warning(f"⚠️ Ruta base '{ruta_base}' no es absoluta. Agregando '/'")
-                ruta_base = f"/{ruta_base}"
-                
-            self.logger.info(f"📤 Nombre remoto: {nombre_remoto}, Ruta base: {ruta_base}")
-            
-            # Construir ruta remota
-            # Ruta remota
-            if ruta_base == "/":
-                ruta_remota = f"/{nombre_remoto}"
-            else:
-                ruta_remota = f"{ruta_base}/{nombre_remoto}"
-            
-            self.logger.info(f"📍 Ruta remota FINAL: {ruta_remota}")
-            
-            # 2. Enviar por FTP
-            self.logger.info(f"🚀 Enviando por FTP...")
+        # 1. Intentar FTP (Siempre primero)
+        plantilla = self.get_plantilla(filename)
+        nombre_remoto = plantilla.get("nombre_remoto", filename)
+        ruta_base = self.config.get("ruta_remota", "/").rstrip('/')
+        ruta_remota = f"{ruta_base}/{nombre_remoto}" if ruta_base != "/" else f"/{nombre_remoto}"
+
+        # Si ya es un archivo marcado como 'email_pendiente', saltamos el FTP
+        ftp_ya_completado = filename.endswith('.email_pending')
+        ftp_exitoso = True
+
+        if not ftp_ya_completado:
             ftp_exitoso = self.transfer_service.enviar_archivo(ruta_archivo, ruta_remota)
-            
-            if ftp_exitoso:
-                self.logger.info(f"✅ FTP EXITOSO: {filename}")
-            else:
-                self.logger.error(f"❌ FTP FALLIDO: {filename}")
-                self._consecutive_failures += 1
-                return False
-            
-            # 3. Enviar por Email
-            email_exitoso = self._enviar_email_archivo(ruta_archivo)
-            
-            if email_exitoso:
-                # Crear respaldo y eliminar
-                if self._crear_respaldo_seguro(ruta_archivo):
-                    try:
-                        os.remove(ruta_archivo)
-                        self.logger.info(f"✅ Archivo completado: {filename}")
-                        self._consecutive_failures = 0
-                        return True
-                    except Exception as e:
-                        self.logger.error(f"❌ Error eliminando {filename}: {e}")
-                        # Archivo enviado pero no eliminado - aún éxito
-                        return True
-                return True
-            else:
-                # Renombrar para reintento de email
-                nueva_ruta = f"{ruta_archivo}.email_pending"
+            if not ftp_exitoso:
+                self.logger.error(f"❌ FTP Fallido para {filename}. Se mantendrá en cola.")
+                return False # No avanzamos si el FTP falla
+
+        # 2. Intentar Email (Solo si FTP tuvo éxito o ya estaba hecho)
+        email_exitoso = self._enviar_email_archivo(ruta_archivo)
+        
+        if email_exitoso:
+            # ✅ ÉXITO TOTAL: Solo aquí se crea respaldo y se borra el original
+            if self._crear_respaldo_seguro(ruta_archivo):
                 try:
-                    os.rename(ruta_archivo, nueva_ruta)
-                    self.logger.warning(f"⚠️ Email falló, pendiente: {filename}")
-                    return False
-                except Exception as e:
-                    self.logger.error(f"❌ Error renombrando {filename}: {e}")
-                    return False
-                    
-        # ✅ CORRECCIÓN CRÍTICA: Manejo CORRECTO de excepciones
-        except Exception as e:
-            error_msg = f"Error procesando {filename}: {type(e).__name__}: {str(e)}"
-            
-            error_str = str(e).lower()
-            errores_transitorios = [
-                'timeout', 'connection', 'socket', 'reset', '10054',
-                'cannot read from timed out', 'timed out', 'oserror'
-            ]
-            
-            es_transitorio = any(trans in error_str for trans in errores_transitorios)
-            
-            if es_transitorio:
-                self.logger.warning(f"⚠️ Error transitorio en {filename}: {error_msg}")
-            else:
-                self.logger.error(f"❌ Error crítico en {filename}: {error_msg}")
-                # APORTACIÓN 3 y 4: Uso de código oficial y estandarización de mensaje para Anti-Spam
-                self.error_handler.log_error("305", "Fallo crítico al procesar archivo de reporte", es_error_sistema=True)
-                self._consecutive_failures += 1
-            
+                    os.remove(ruta_archivo)
+                    self.logger.info(f"✅ Ciclo completo para {filename}")
+                    return True
+                except: return True
+        else:
+            # Éxito FTP pero fallo Email: Marcamos para reintento de email únicamente
+            if not ftp_ya_completado:
+                nueva_ruta = f"{ruta_archivo}.email_pending"
+                os.rename(ruta_archivo, nueva_ruta)
             return False
     
     def _ejecutar_envio_automatico(self):
@@ -572,12 +502,13 @@ class FileScheduler:
                 hora_str = self.config.get("hora_envio", "23:59")
                 hora, minuto = map(int, hora_str.split(':'))
                 
-                # Job principal
+                # ✅ RUTINA INDUSTRIAL DE PERSISTENCIA
                 self._scheduler.add_job(
                     func=self._ejecutar_envio_automatico,
-                    trigger=CronTrigger(hour=hora, minute=minuto),
-                    id='envio_automatico_diario',
-                    name=f'Envío automático {hora:02d}:{minuto:02d}',
+                    trigger='interval',
+                    minutes=15,
+                    id='persistencia_industrial',
+                    name='Reintento continuo de envíos fallidos',
                     replace_existing=True
                 )
                 

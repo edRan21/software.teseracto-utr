@@ -234,12 +234,17 @@ class ReportsWindow(QWidget):
                 f.write(contenido + "\n")
             
             # 2. Archivo diario de envío (Enviado a pendientes_usb para FTP/Email y USB Automático)
+            # ✅ REFACTORIZACIÓN: ESCRITURA ATÓMICA
             nombre_diario = name_gen.generate_daily_name(tipo_reporte)
-            pendientes_dir = str(path_manager.get_pendientes_usb_path())
-            os.makedirs(pendientes_dir, exist_ok=True)
             ruta_diario = os.path.join(pendientes_dir, nombre_diario)
-            with open(ruta_diario, 'w', encoding='utf-8') as f:
+            ruta_temp = ruta_diario + ".tmp"
+            
+            # Escribimos en un archivo temporal (.tmp) que el Scheduler ignora
+            with open(ruta_temp, 'w', encoding='utf-8') as f:
                 f.write(contenido)
+            
+            # El renombrado es atómico: el archivo aparece en la carpeta solo cuando está 100% escrito
+            os.rename(ruta_temp, ruta_diario)
                 
         except Exception as e:
             self.error_handler.log_error("304", f"ERROR CRÍTICO generando reporte diario: {str(e)}", es_error_sistema=True)

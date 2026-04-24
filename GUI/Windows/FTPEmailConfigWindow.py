@@ -642,39 +642,16 @@ class FTPEmailConfigWindow(QWidget):
             # Usar QTimer para ejecutar en hilo separado
             from PyQt5.QtCore import QTimer
             def process_result():
-                try:
-                    resultado = execute_send()
-                    
-                    # Cerrar diálogo
-                    if self.progress_dialog:
-                        self.progress_dialog.close()
-                        self.progress_dialog = None
-                    
-                    # Actualizar UI
-                    self._actualizar_estado_ui()
-                    
-                    # Mostrar resultado
-                    QMessageBox.information(
-                        self,
-                        "✅ Envío Completado",
-                        f"Envío inmediato completado:\n\n"
-                        f"• Archivos exitosos: {resultado['exitosos']}\n"
-                        f"• Archivos fallidos: {resultado['fallidos']}\n"
-                        f"• Tiempo total: {resultado['tiempo_segundos']:.1f} segundos\n\n"
-                        f"{resultado['mensaje']}"
-                    )
-                    
-                    self._agregar_log(f"⚡ Envío inmediato completado: {resultado['exitosos']} exitosos")
-                    
-                except Exception as e:
-                    # APORTACIÓN 1: Código oficial "010"
-                    self.error_handler.log_error("010", f"Error procesando resultado de envío inmediato: {e}", es_error_sistema=True)
-                    if self.progress_dialog:
-                        self.progress_dialog.close()
-                        self.progress_dialog = None
-            
-            # Ejecutar después de 100ms para no bloquear UI
-            QTimer.singleShot(100, process_result)
+                # Obtenemos estado ANTES y DESPUÉS del proceso
+                # La diferencia real son los archivos que ya no están en 'Pendientes'
+                resultado = execute_send() 
+                # (Asegúrate de que FileScheduler.forzar_envio_inmediato use la lógica 
+                # de diferencia que establecimos anteriormente)
+                
+                self._actualizar_estado_ui()
+                QMessageBox.information(self, "Resultado Real", 
+                    f"Reportes transferidos con éxito: {resultado['exitosos']}\n"
+                    f"Reportes que siguen en cola por error: {resultado['fallidos']}")
             
         except Exception as e:
             # APORTACIÓN 1: Código oficial "010"
