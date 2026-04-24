@@ -236,6 +236,12 @@ class ReportsWindow(QWidget):
             # 2. Archivo diario de envío (Enviado a pendientes_usb para FTP/Email y USB Automático)
             # ✅ REFACTORIZACIÓN: ESCRITURA ATÓMICA
             nombre_diario = name_gen.generate_daily_name(tipo_reporte)
+            
+            # -> LÍNEAS RESTAURADAS: Definir la variable pendientes_dir y asegurar que el directorio exista
+            pendientes_dir = str(path_manager.get_pendientes_usb_path())
+            os.makedirs(pendientes_dir, exist_ok=True)
+            
+            # Ahora sí se puede armar la ruta correctamente
             ruta_diario = os.path.join(pendientes_dir, nombre_diario)
             ruta_temp = ruta_diario + ".tmp"
             
