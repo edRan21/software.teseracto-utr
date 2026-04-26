@@ -1025,13 +1025,15 @@ class FTPConaguaWindow(QWidget):
             ftp_manager = FTPManager(ftp_config, self.error_handler)
             remote_filename = os.path.join(remote_path, self.current_filename) if remote_path else self.current_filename
             
-            success = ftp_manager.enviar_archivo(temp_path, remote_filename)
+            # ✅ DESEMPAQUETAR TUPLA Y MOSTRAR AL USUARIO
+            success, server_msg = ftp_manager.enviar_archivo(temp_path, remote_filename)
             
             if success:
-                QMessageBox.information(self, "Éxito", "Reporte enviado correctamente al servidor FTP.")
-                self.error_handler.log_evento("Reporte Unidad de Inspección enviado con éxito a CONAGUA", "200")
+                QMessageBox.information(self, "Éxito", f"Reporte enviado correctamente.\nRespuesta: {server_msg}")
+                self.error_handler.log_evento("Reporte Unidad de Inspección enviado con éxito", "200")
             else:
-                QMessageBox.warning(self, "Error", "No se pudo enviar el reporte. Verifique la conexión.")
+                QMessageBox.warning(self, "Error de Envío", f"No se pudo enviar el reporte.\nRazón: {server_msg}")
+                
         except Exception as e:
             # APORTACIÓN 2: Registrar excepción crítica FTP
             self.error_handler.log_error("FTP-UPLOAD", f"Excepción crítica al enviar reporte: {e}", es_error_sistema=True)

@@ -235,9 +235,17 @@ class FileScheduler:
         except Exception as e:
             self.logger.error(f"Fallo crítico al intentar escribir el log: {e}")
 
-    def _procesar_archivo_individual(self, ruta_archivo: str) -> bool:
-        """Sube archivo mediante FTP y luego Email secuencialmente."""
+    def _procesar_archivo_individual(self, ruta_archivo: str) -> Dict[str, Any]:
+        """Procesa FTP y Email de forma 100% independiente y registra en errores.log"""
+        
         filename = os.path.basename(ruta_archivo)
+        resultado = {
+            "ftp_ok": False,
+            "ftp_msg": "No ejecutado",
+            "email_ok": False,
+            "exito_completo": False
+        }
+        
         try:
             plantilla = self.get_plantilla(filename)
             nombre_remoto = plantilla.get("nombre_remoto", filename)
@@ -246,34 +254,61 @@ class FileScheduler:
 
             es_email_pendiente = filename.endswith('.email_pending')
             
-            # 1. FTP
+            # ==========================================
+            # 1. BLOQUE FTP (Aislado)
+            # ==========================================
             if not es_email_pendiente:
-                ftp_exitoso = self.transfer_service.enviar_archivo(ruta_archivo, ruta_remota)
-                if not ftp_exitoso:
-                    return False # Si FTP falla, se corta el procesamiento de este archivo
+                ftp_ok, ftp_msg = self.transfer_service.enviar_archivo(ruta_archivo, ruta_remota)
+                resultado["ftp_ok"] = ftp_ok
+                resultado["ftp_msg"] = ftp_msg
+                
+                if not ftp_ok:
+                    self.logger.error(f"FTP Fallido para {filename}: {ftp_msg}")
+                    # ✅ REGISTRO FÍSICO: Se envía al errores.log
+                    self.error_handler.log_error("FTP-550", f"Fallo FTP en {filename}: {ftp_msg}", es_error_sistema=True)
+            else:
+                resultado["ftp_ok"] = True
+                resultado["ftp_msg"] = "Ya enviado previamente (Omitido)"
 
-            # 2. Email
-            email_exitoso = self._enviar_email_archivo(ruta_archivo)
+            # ==========================================
+            # 2. BLOQUE EMAIL (Aislado e Independiente)
+            # ==========================================
+            # ✅ INDEPENDENCIA: Se ejecuta sin importar si el FTP falló o tuvo éxito
+            email_ok = self._enviar_email_archivo(ruta_archivo)
+            resultado["email_ok"] = email_ok
             
-            if email_exitoso:
+            if not email_ok:
+                self.error_handler.log_error("EMAIL-FAIL", f"Fallo Email en {filename}", es_error_sistema=True)
+
+            # ==========================================
+            # 3. EVALUACIÓN Y PERSISTENCIA
+            # ==========================================
+            if resultado["ftp_ok"] and resultado["email_ok"]:
+                resultado["exito_completo"] = True
                 if self._crear_respaldo_seguro(ruta_archivo):
                     try: os.remove(ruta_archivo)
                     except: pass
-                return True
-            else:
+            elif resultado["ftp_ok"] and not resultado["email_ok"]:
+                # FTP exitoso, Email fallido. Cambiamos extensión para no repetir FTP
                 if not es_email_pendiente:
                     nueva_ruta = f"{ruta_archivo}.email_pending"
                     try: os.rename(ruta_archivo, nueva_ruta)
                     except: pass
-                # Retorna True porque el FTP ya se logró. Permite que la fila india pase al siguiente archivo.
-                return True 
+            
+            # Nota: Si FTP falla, simplemente no lo renombramos ni lo borramos. 
+            # El archivo se queda como .txt para el siguiente intento.
+            
+            return resultado
 
         except Exception as e:
-            self.logger.error(f"Excepción en {filename}: {e}")
-            return False
+            msg = f"Error crítico procesando {filename}: {str(e)}"
+            self.logger.error(msg)
+            self.error_handler.log_error("SYS-FAIL", msg, es_error_sistema=True)
+            resultado["ftp_msg"] = msg
+            return resultado
     
     def _ejecutar_envio_automatico(self, modo="AUTOMÁTICO"):
-        """Procesa estrictamente en FILA INDIA y genera log detallado."""
+        """Procesa estrictamente en FILA INDIA SIN INTERRUPCIONES."""
         if self._is_processing:
             return
 
@@ -283,50 +318,47 @@ class FileScheduler:
             resultados_sesion = []
             
             try:
+                import os
                 directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
                 if not os.path.exists(directorio):
                     return
                 
-                # Obtener archivos .txt y .email_pending
                 archivos = [os.path.join(directorio, f) for f in os.listdir(directorio) if f.endswith('.txt') or f.endswith('.email_pending')]
                 
                 if not archivos:
                     self._last_successful_run = datetime.now()
                     return
                 
-                # Ordenar por fecha de creación (el más antiguo primero)
                 archivos.sort(key=os.path.getmtime)
                 
                 exitosos = 0
                 for ruta_archivo in archivos:
                     nombre = os.path.basename(ruta_archivo)
-                    es_pendiente_email = ruta_archivo.endswith('.email_pending')
                     
-                    # ✅ CORRECCIÓN DE SECUENCIA: Capturamos la fecha ANTES de enviar y borrar el archivo
                     try:
                         fecha_archivo = datetime.fromtimestamp(os.path.getmtime(ruta_archivo)).isoformat()
                     except OSError:
                         fecha_archivo = datetime.now().isoformat()
                     
-                    # Intentamos enviar el archivo (Aquí el archivo puede ser eliminado)
-                    exito = self._procesar_archivo_individual(ruta_archivo)
+                    # Se procesa el archivo. FTP y Email corren su suerte de forma independiente.
+                    res = self._procesar_archivo_individual(ruta_archivo)
                     
-                    # Guardamos el resultado para el log usando la fecha pre-capturada
                     resultados_sesion.append({
                         "archivo": nombre,
                         "fecha_archivo": fecha_archivo,
-                        "ftp_ok": True if es_pendiente_email else exito, 
-                        "email_ok": exito,
+                        "ftp_ok": res["ftp_ok"],
+                        "ftp_respuesta": res["ftp_msg"], 
+                        "email_ok": res["email_ok"],
                         "timestamp_envio": datetime.now().isoformat()
                     })
                     
-                    if exito:
+                    if res["exito_completo"]:
                         exitosos += 1
-                    elif not es_pendiente_email:
-                        # Si falló y no era un pendiente de email, el FTP fracasó. Rompemos la fila.
-                        break
+                        
+                    # ✅ ELIMINADO EL 'break'. 
+                    # Ahora el ciclo itera y procesa TODO el lote de 5 o 10 archivos,
+                    # sin importar si uno falló, asegurando que ninguno se quede sin intento.
                 
-                # 💡 Generar log al finalizar la sesión de procesamiento
                 if resultados_sesion:
                     self._guardar_log_envio_detallado(inicio_sesion, resultados_sesion, modo)
                 
@@ -334,7 +366,7 @@ class FileScheduler:
                     self._last_successful_run = datetime.now()
 
             except Exception as e:
-                self.logger.error(f"Error en el ciclo de ejecución automático: {str(e)}")
+                self.logger.error(f"Error en el ciclo de ejecución: {str(e)}")
             finally:
                 self._is_processing = False
     
