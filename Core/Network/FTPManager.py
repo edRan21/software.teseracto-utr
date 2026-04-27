@@ -243,6 +243,7 @@ class FTPManager(IFileTransfer):
                 
                 self._cerrar_conexion()
                 self.logger.info(f"🎉 Envío FTP EXITOSO: {filename}")
+                self.error_handler.log_evento("Reporte enviado con éxito", "200")
                 return True, ftp_respuesta
                 
             except (socket.timeout, TimeoutError) as e:

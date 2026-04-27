@@ -308,66 +308,65 @@ class FileScheduler:
             return resultado
     
     def _ejecutar_envio_automatico(self, modo="AUTOMÁTICO"):
-        """Procesa estrictamente en FILA INDIA SIN INTERRUPCIONES."""
-        if self._is_processing:
-            return
-
+        """Procesa estrictamente en FILA INDIA SIN CONGELAR EL SISTEMA."""
+        # 1. BLOQUEO MILIMÉTRICO (Solo para checar si ya estamos ocupados)
         with self._lock:
+            if self._is_processing:
+                return
             self._is_processing = True
-            inicio_sesion = datetime.now()
-            resultados_sesion = []
-            
-            try:
-                import os
-                directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
-                if not os.path.exists(directorio):
-                    return
-                
-                archivos = [os.path.join(directorio, f) for f in os.listdir(directorio) if f.endswith('.txt') or f.endswith('.email_pending')]
-                
-                if not archivos:
-                    self._last_successful_run = datetime.now()
-                    return
-                
-                archivos.sort(key=os.path.getmtime)
-                
-                exitosos = 0
-                for ruta_archivo in archivos:
-                    nombre = os.path.basename(ruta_archivo)
-                    
-                    try:
-                        fecha_archivo = datetime.fromtimestamp(os.path.getmtime(ruta_archivo)).isoformat()
-                    except OSError:
-                        fecha_archivo = datetime.now().isoformat()
-                    
-                    # Se procesa el archivo. FTP y Email corren su suerte de forma independiente.
-                    res = self._procesar_archivo_individual(ruta_archivo)
-                    
-                    resultados_sesion.append({
-                        "archivo": nombre,
-                        "fecha_archivo": fecha_archivo,
-                        "ftp_ok": res["ftp_ok"],
-                        "ftp_respuesta": res["ftp_msg"], 
-                        "email_ok": res["email_ok"],
-                        "timestamp_envio": datetime.now().isoformat()
-                    })
-                    
-                    if res["exito_completo"]:
-                        exitosos += 1
-                        
-                    # ✅ ELIMINADO EL 'break'. 
-                    # Ahora el ciclo itera y procesa TODO el lote de 5 o 10 archivos,
-                    # sin importar si uno falló, asegurando que ninguno se quede sin intento.
-                
-                if resultados_sesion:
-                    self._guardar_log_envio_detallado(inicio_sesion, resultados_sesion, modo)
-                
-                if exitosos > 0:
-                    self._last_successful_run = datetime.now()
 
-            except Exception as e:
-                self.logger.error(f"Error en el ciclo de ejecución: {str(e)}")
-            finally:
+        # 2. PROCESO DE RED (Totalmente libre de candados)
+        inicio_sesion = datetime.now()
+        resultados_sesion = []
+        
+        try:
+            import os
+            directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
+            if not os.path.exists(directorio):
+                return
+            
+            archivos = [os.path.join(directorio, f) for f in os.listdir(directorio) if f.endswith('.txt') or f.endswith('.email_pending')]
+            
+            if not archivos:
+                self._last_successful_run = datetime.now()
+                return
+            
+            archivos.sort(key=os.path.getmtime)
+            
+            exitosos = 0
+            for ruta_archivo in archivos:
+                nombre = os.path.basename(ruta_archivo)
+                
+                try:
+                    fecha_archivo = datetime.fromtimestamp(os.path.getmtime(ruta_archivo)).isoformat()
+                except OSError:
+                    fecha_archivo = datetime.now().isoformat()
+                
+                res = self._procesar_archivo_individual(ruta_archivo)
+                
+                resultados_sesion.append({
+                    "archivo": nombre,
+                    "fecha_archivo": fecha_archivo,
+                    "ftp_ok": res["ftp_ok"],
+                    "ftp_respuesta": res["ftp_msg"], 
+                    "email_ok": res["email_ok"],
+                    "timestamp_envio": datetime.now().isoformat()
+                })
+                
+                if res["exito_completo"]:
+                    exitosos += 1
+            
+            if resultados_sesion:
+                self._guardar_log_envio_detallado(inicio_sesion, resultados_sesion, modo)
+            
+            if exitosos > 0:
+                self._last_successful_run = datetime.now()
+
+        except Exception as e:
+            self.logger.error(f"Error en el ciclo de ejecución: {str(e)}")
+        finally:
+            # 3. LIBERACIÓN DEL ESTADO (Para que el siguiente ciclo pueda entrar)
+            with self._lock:
                 self._is_processing = False
     
     def actualizar_hora_envio(self, nueva_hora: str):
