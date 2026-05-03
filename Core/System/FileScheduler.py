@@ -308,7 +308,9 @@ class FileScheduler:
             return resultado
     
     def _ejecutar_envio_automatico(self, modo="AUTOMÁTICO"):
-        """Procesa estrictamente en FILA INDIA SIN CONGELAR EL SISTEMA."""
+        """Procesa estrictamente en FILA INDIA SIN CONGELAR EL SISTEMA. Respetando la hora programada.
+            El macro-reintento evaluará el tiempo antes de enviar.
+        """
         # 1. BLOQUEO MILIMÉTRICO (Solo para checar si ya estamos ocupados)
         with self._lock:
             if self._is_processing:
@@ -322,6 +324,16 @@ class FileScheduler:
         try:
             import os
             directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
+            
+            # Obtenemos la hora programada de la configuración (por defecto 23:59)
+            hora_envio_str = self.config.get("hora_envio", "23:59")
+            try:
+                # Convertimos el texto "HH:MM" a un objeto de tiempo para cálculos matemáticos
+                hora_envio_obj = datetime.strptime(hora_envio_str, "%H:%M").time()
+            except ValueError:
+                self.logger.warning(f"Formato de hora inválido: {hora_envio_str}. Usando 23:59.")
+                hora_envio_obj = datetime.strptime("23:59", "%H:%M").time()
+                 
             if not os.path.exists(directorio):
                 return
             
@@ -336,11 +348,43 @@ class FileScheduler:
             exitosos = 0
             for ruta_archivo in archivos:
                 nombre = os.path.basename(ruta_archivo)
+                ahora = datetime.now()
                 
                 try:
-                    fecha_archivo = datetime.fromtimestamp(os.path.getmtime(ruta_archivo)).isoformat()
+                    fecha_mtime = datetime.fromtimestamp(os.path.getmtime(ruta_archivo))
+                    fecha_archivo = fecha_mtime.isoformat() 
                 except OSError:
-                    fecha_archivo = datetime.now().isoformat()
+                    fecha_mtime = ahora
+                    fecha_archivo = ahora.isoformat()
+                
+                # =========================================================
+                # 🧠 LÓGICA DE SINCRONIZACIÓN DE TIEMPO
+                # =========================================================
+                debe_enviarse = False
+                
+                if modo == "MANUAL":
+                    # Si el usuario presiona el botón "Envío Inmediato", ignoramos la hora.
+                    debe_enviarse = True
+                else:
+                    if fecha_mtime.date() < ahora.date():
+                        # Si el archivo es de ayer o antes (rezago real), se envía de inmediato.
+                        debe_enviarse = True
+                    elif fecha_mtime.date() == ahora.date():
+                        # Si el archivo es de hoy, verificamos si ya llegó la hora oficial.
+                        hora_envio_hoy = datetime.combine(ahora.date(), hora_envio_obj)
+                        if ahora >= hora_envio_hoy:
+                            debe_enviarse = True
+                        else:
+                            # El macro-reintento despertó antes de la hora oficial.
+                            # Se ignora el archivo para que espere su turno a la hora en que se programe el envió.
+                            self.logger.debug(f"Archivo {nombre} en espera. Aún no son las {hora_envio_str}.")
+                            debe_enviarse = False
+                    else:
+                        debe_enviarse = False
+                # Si la lógica decide que aún no es tiempo, saltamos al siguiente archivo
+                if not debe_enviarse:
+                    continue
+                # ========================================================
                 
                 res = self._procesar_archivo_individual(ruta_archivo)
                 
