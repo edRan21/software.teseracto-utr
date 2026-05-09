@@ -43,6 +43,25 @@ class WorkerActualizacion(QThread):
         except Exception as e:
             print(f"Error en worker: {e}")
 
+class WorkerEnvioManual(QThread):
+    """Worker para enviar archivos manualmente sin congelar la interfaz gráfica"""
+    resultado_obtenido = pyqtSignal(dict)
+    
+    def __init__(self, file_scheduler):
+        super().__init__()
+        self.file_scheduler = file_scheduler
+    
+    def run(self):
+        try:
+            # Ejecuta la función real de envío y emite el resultado a la UI
+            resultado = self.file_scheduler.forzar_envio_inmediato()
+            self.resultado_obtenido.emit(resultado)
+        except Exception as e:
+            self.resultado_obtenido.emit({
+                "exitosos": 0, "fallidos": 0, "total": 0, 
+                "mensaje": f"Fallo en hilo de ejecución: {str(e)}"
+            })
+
 class FTPEmailConfigWindow(QWidget):
     """Ventana de configuración FTP/Email - VERSIÓN SIMPLIFICADA"""
     
@@ -589,7 +608,7 @@ class FTPEmailConfigWindow(QWidget):
         QTimer.singleShot(100, execute_test)
     
     def _forzar_envio_inmediato_safe(self):
-        """Fuerza envío inmediato SIN bloquear UI (versión corregida)"""
+        """Fuerza envío inmediato usando un Worker (Hilo) para no bloquear UI"""
         respuesta = QMessageBox.question(
             self,
             "⚠️ Envío Inmediato",
@@ -601,88 +620,62 @@ class FTPEmailConfigWindow(QWidget):
         
         if respuesta != QMessageBox.Yes:
             return
-        
+            
         try:
-            # Mostrar progreso INDETERMINADO
+            # Verificamos si ya hay un envío de fondo trabajando para no empalmar
+            estado_actual = self.file_scheduler.obtener_estado()
+            if estado_actual.get("archivos_pendientes", 0) == 0 and estado_actual.get("archivos_fallidos_email", 0) == 0:
+                QMessageBox.information(self, "Aviso", "No hay archivos pendientes para enviar.")
+                return
+
+            # Mostrar progreso visual
             self.progress_dialog = QProgressDialog(
-                "Enviando archivos pendientes...", 
-                "Cancelar", 
-                0, 
-                0, 
-                self
+                "Enviando archivos al servidor... Por favor espere.", 
+                "Cancelar", 0, 0, self
             )
-            self.progress_dialog.setWindowTitle("⚡ Envío Inmediato")
+            self.progress_dialog.setWindowTitle("⚡ Procesando Envío")
             self.progress_dialog.setWindowModality(Qt.WindowModal)
             self.progress_dialog.setMinimumDuration(500)
             self.progress_dialog.setValue(0)
             self.progress_dialog.show()
             
-            # Función que se ejecutará en hilo separado
-            def execute_send():
-                try:
-                    if hasattr(self.file_scheduler, 'forzar_envio_inmediato'):
-                        return self.file_scheduler.forzar_envio_inmediato()
-                    else:
-                        return {
-                            "exitosos": 0,
-                            "fallidos": 0,
-                            "total": 0,
-                            "tiempo_segundos": 0,
-                            "mensaje": "Método no disponible"
-                        }
-                except Exception as e:
-                    return {
-                        "exitosos": 0,
-                        "fallidos": 0,
-                        "total": 0,
-                        "tiempo_segundos": 0,
-                        "mensaje": f"Error: {str(e)}"
-                    }
-            
-            # Usar QTimer para ejecutar en hilo separado
-            from PyQt5.QtCore import QTimer
-            def process_result():
-                try:
-                    resultado = execute_send()
-                    
-                    # Cerrar diálogo
-                    if self.progress_dialog:
-                        self.progress_dialog.close()
-                        self.progress_dialog = None
-                    
-                    # Actualizar UI
-                    self._actualizar_estado_ui()
-                    
-                    # Mostrar resultado
-                    QMessageBox.information(
-                        self,
-                        "✅ Envío Completado",
-                        f"Envío inmediato completado:\n\n"
-                        f"• Archivos exitosos: {resultado['exitosos']}\n"
-                        f"• Archivos fallidos: {resultado['fallidos']}\n"
-                        f"• Tiempo total: {resultado['tiempo_segundos']:.1f} segundos\n\n"
-                        f"{resultado['mensaje']}"
-                    )
-                    
-                    self._agregar_log(f"⚡ Envío inmediato completado: {resultado['exitosos']} exitosos")
-                    
-                except Exception as e:
-                    # APORTACIÓN 1: Código oficial "010"
-                    self.error_handler.log_error("010", f"Error procesando resultado de envío inmediato: {e}", es_error_sistema=True)
-                    if self.progress_dialog:
-                        self.progress_dialog.close()
-                        self.progress_dialog = None
-            
-            # Ejecutar después de 100ms para no bloquear UI
-            QTimer.singleShot(100, process_result)
+            # Lanzamos el Worker real
+            self.worker_envio = WorkerEnvioManual(self.file_scheduler)
+            self.worker_envio.resultado_obtenido.connect(self._on_envio_manual_terminado)
+            self.worker_envio.start()
             
         except Exception as e:
-            # APORTACIÓN 1: Código oficial "010"
-            self.error_handler.log_error("010", f"Fallo al forzar envío inmediato: {e}", es_error_sistema=True)
+            self.error_handler.log_error("010", f"Fallo al iniciar envío inmediato: {e}", es_error_sistema=True)
             if self.progress_dialog:
                 self.progress_dialog.close()
-                self.progress_dialog = None
             QMessageBox.critical(self, "Error", f"Error:\n{str(e)}")
+
+    def _on_envio_manual_terminado(self, resultado):
+        """Recibe la respuesta del Worker cuando termina de enviar todo"""
+        # Cerrar ventana de carga
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+            
+        # Refrescar la tabla visualmente
+        self._actualizar_estado_ui()
+        
+        mensaje = resultado.get("mensaje", "")
+        exitosos = resultado.get("exitosos", 0)
+        fallidos = resultado.get("fallidos", 0)
+        
+        if exitosos > 0:
+            QMessageBox.information(self, "✅ Envío Finalizado", 
+                f"Reportes transferidos con éxito: {exitosos}\n"
+                f"Reportes fallidos en cola: {fallidos}\n\n"
+                f"Revise la pestaña de REGISTROS.")
+            self.error_handler.log_evento("Reporte enviado manualmente con éxito", "200")
+        elif fallidos > 0:
+            QMessageBox.warning(self, "⚠️ Envío Fallido", 
+                f"No se pudo enviar los archivos ({fallidos} siguen pendientes).\n"
+                f"Revise su conexión a internet o los logs de error.")
+        else:
+            QMessageBox.information(self, "Información", mensaje)
     
     # ========== MÉTODOS EXISTENTES QUE FUNCIONAN BIEN ==========
     

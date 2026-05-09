@@ -1,12 +1,12 @@
 {
     "RFC": "HUJL0108026H5",
-    "NSM": "TESTISOMAG-019",
-    "NSUE": "TEST-020",
-    "NSUT": "TSRA-000",
+    "NSM": "TEST-123",
+    "NSUE": "TEST-123",
+    "NSUT": "TEST-201",
     "Lat": 19.01714246158,
     "Long": -98.2583521089,
     "unidad_visualizacion": "L/s",
     "storage_path": "C:\\Users\\ahuer\\OneDrive\\Desktop\\test",
     "hora_reporte": "13:40",
-    "report_type": "Medidor"
+    "report_type": "SistemaMedicion"
 }

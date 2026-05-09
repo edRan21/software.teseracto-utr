@@ -6,7 +6,7 @@ import logging
 import os
 import time
 import socket
-from typing import Optional
+from typing import Optional, Tuple
 from Core.System.ErrorHandler import ErrorHandler
 from .IFileTransfer import IFileTransfer
 
@@ -180,18 +180,18 @@ class FTPManager(IFileTransfer):
             self.logger.error(f"Error detallado validando {local_path}: {e}")
             return False
     
-    def enviar_archivo(self, local_path: str, remote_path: str) -> bool:
-        """Envía archivo con reintentos y manejo diferenciado de errores"""
+    def enviar_archivo(self, local_path: str, remote_path: str) -> Tuple[bool, str]:
+        """Envía archivo respetando tu lógica original y devolviendo (Éxito, Mensaje)"""
         if not os.path.exists(local_path):
             self.logger.error(f"❌ Archivo no existe: {local_path}")
-            return False
+            return False, "Archivo local no existe en el disco."
         
         filename = os.path.basename(local_path)
         
         # 1. Validar formato
         if not self._validar_formato_conagua(local_path):
             self.logger.error(f"❌ Validación fallida para {filename}")
-            return False
+            return False, "Validación de formato CONAGUA fallida."
         
         # 2. Normalizar ruta remota
         remote_path = self._normalizar_ruta_remota(remote_path)
@@ -207,9 +207,9 @@ class FTPManager(IFileTransfer):
                     if attempt < 2:
                         time.sleep(2)
                         continue
-                    return False
+                    return False, "Imposible conectar al servidor FTP tras 3 intentos."
                 
-                # Directorios remotos
+                # ✅ USAMOS TU LÓGICA ORIGINAL QUE SÍ FUNCIONA (Sortea el error 550)
                 remote_dir = os.path.dirname(remote_path)
                 if remote_dir:
                     try:
@@ -223,13 +223,12 @@ class FTPManager(IFileTransfer):
                             time.sleep(2)
                             continue
                         self._cerrar_conexion()
-                        return False
+                        return False, f"Error navegando al directorio remoto: {str(e)}"
                 
-                # Enviar archivo
+                # Enviar archivo y capturar la respuesta del servidor
                 remote_filename = os.path.basename(remote_path)
-                
                 with open(local_path, "rb") as file:
-                    self.connection.storbinary(f"STOR {remote_filename}", file)
+                    ftp_respuesta = self.connection.storbinary(f"STOR {remote_filename}", file)
                 
                 # Verificación rápida
                 try:
@@ -244,13 +243,14 @@ class FTPManager(IFileTransfer):
                 
                 self._cerrar_conexion()
                 self.logger.info(f"🎉 Envío FTP EXITOSO: {filename}")
-                return True
+                self.error_handler.log_evento("Reporte enviado con éxito", "200")
+                return True, ftp_respuesta
                 
             except (socket.timeout, TimeoutError) as e:
                 self.logger.warning(f"⏰ Timeout en intento {attempt + 1}: {e}")
                 self._cerrar_conexion()
                 if attempt < 2:
-                    time.sleep(3)  # Esperar un poco más
+                    time.sleep(3)
                     continue
             
             except ConnectionResetError as e:
@@ -271,7 +271,7 @@ class FTPManager(IFileTransfer):
                 error_msg = str(e)
                 self.logger.error(f"❌ Error de permisos FTP: {error_msg}")
                 self._cerrar_conexion()
-                return False  # No reintentar errores de permisos
+                return False, f"Bloqueo de permisos del servidor: {error_msg}"
             
             except OSError as e:
                 if "cannot read from timed out object" in str(e):
@@ -283,7 +283,7 @@ class FTPManager(IFileTransfer):
                 else:
                     self.logger.error(f"❌ Error OS: {e}")
                     self._cerrar_conexion()
-                    return False
+                    return False, f"Error del sistema operativo: {str(e)}"
             
             except Exception as e:
                 self.logger.error(f"❌ Error inesperado en intento {attempt + 1}: {type(e).__name__}: {e}")
@@ -292,10 +292,9 @@ class FTPManager(IFileTransfer):
                     time.sleep(2)
                     continue
         
-        # APORTACIÓN 4: Evitar el fallo silencioso notificando al usuario en la interfaz
         self.error_handler.log_error("FTP-UPLOAD", f"FTP falló tras 3 intentos. Archivo: {filename}", es_error_sistema=True)
         self.logger.warning(f"⚠️ FTP falló después de 3 intentos: {filename}")
-        return False
+        return False, "Fallo desconocido tras múltiples intentos."
     
     def _cerrar_conexion(self):
         """Cierra conexión FTP de forma segura"""
