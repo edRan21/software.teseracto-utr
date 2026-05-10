@@ -54,16 +54,11 @@ class Float32Decoder(ModbusDecoderStrategy):
         )
         valor = dec.decode_32bit_float()
         
-        # Solo escalar si NO es unidad de usuario
-        if "unidad_medidor" in reg_config and reg_config["unidad_medidor"] == "user_units":
-            return valor
-        return valor * reg_config.get("escala", 1.0)
+        return valor 
 
 class Int16Decoder(ModbusDecoderStrategy):
     def decodificar(self, registers, reg_config, perfil) -> int:
-        if reg_config.get("no_escalar", False):
-            return registers[0]
-        return registers[0] * reg_config.get("escala", 1)
+        return registers[0]
 
 class UInt32Decoder(ModbusDecoderStrategy):
     def decodificar(self, registers, reg_config, perfil) -> int:
@@ -79,7 +74,7 @@ class UInt32Decoder(ModbusDecoderStrategy):
             byteorder=byteorder,
             wordorder=wordorder
         )
-        return dec.decode_32bit_uint() * reg_config.get("escala", 1)
+        return dec.decode_32bit_uint()
 
 class BitmaskDecoder(ModbusDecoderStrategy):
     def decodificar(self, registers, reg_config, perfil) -> Dict[str, bool]:

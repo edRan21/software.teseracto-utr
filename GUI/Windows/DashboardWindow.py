@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayo
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QObject
 from PyQt5.QtGui import QColor, QPalette, QFont, QPixmap
 from Core.DataProcessing.Services import UnitConverter
+from Core.DataProcessing.DataProcessor import DataProcessor
 from Core.System.ConfigManager import ConfigManager
 from Core.System.ErrorHandler import ErrorHandler
 from Core.System.StateManager import StateManager
@@ -60,8 +61,12 @@ class DashboardWindow(QWidget):
         super().__init__()
         self.medidor = medidor
         self.error_handler = error_handler
+        
         self.config_manager = ConfigManager()
         self.unit_converter = UnitConverter()
+        
+        # NUEVO: Instanciamos el procesador de datos usando tu UnitConverter y ErrorHandler
+        self.data_processor = DataProcessor(self.unit_converter, self.error_handler)
         
         self.unidad_medidor = "m³/h"
         self.unidad_visual = self.config_manager.cargar_config_general().get("unidad_visualizacion", "m³/h")
@@ -381,9 +386,13 @@ class DashboardWindow(QWidget):
             # Ejecutar en el hilo del worker
             QTimer.singleShot(0, self.worker.read_data)
 
-    def procesar_datos(self, datos):
+    def procesar_datos(self, datos_crudos):
         """Procesa datos recibidos del worker (en hilo principal)"""
         try:
+            
+            # Transformamos los datos crudos del medidor usando la escala configurada en ConfigWindow
+            datos = self.data_processor.process(datos_crudos, self.medidor.perfil)
+            
             # ========== VERIFICACIÓN PARA RESET KER ==========
             
             # Si tenemos datos válidos y el sistema está operativo, resetear KER
