@@ -270,19 +270,18 @@ class ConfigWindow(QWidget):
     class ConnectionWorker(QThread):
         finished = pyqtSignal(bool, str)
         
-        def __init__(self, medidor, profile, parent=None):
+        def __init__(self, main_window, profile, parent=None):
             super().__init__(parent)
-            self.medidor = medidor
+            self.main_window = main_window # Referencia directa a MainWindow
             self.profile = profile
         
         def run(self):
             try:
-                with self.medidor._connection_lock:
-                    self.medidor.desconectar()
-                    self.medidor.perfil = self.profile
-                    self.medidor._init_client()
-                    
-                    success = self.medidor.conectar()
+                # ✅ Llamamos a la MainWindow para que reconstruya todo
+                nuevo_medidor = self.main_window.actualizar_medidor_global(self.profile)
+                
+                with nuevo_medidor._connection_lock:
+                    success = nuevo_medidor.conectar()
                     message = "✅ Configuración aplicada" if success else "❌ Conexión fallida"
                     self.finished.emit(success, message)
             except Exception as e:
@@ -515,7 +514,8 @@ class ConfigWindow(QWidget):
             self.lbl_status.setText("Aplicando configuración...")
             self.lbl_status.setStyleSheet("color: #3498DB;")
             
-            self.worker = self.ConnectionWorker(self.medidor, profile)
+            # ✅ self.window() obtiene la MainWindow y se la pasamos al hilo
+            self.worker = self.ConnectionWorker(self.window(), profile)
             self.worker.finished.connect(self.handle_connection_result)
             self.worker.start()
             

@@ -146,7 +146,7 @@ class DecoderFactory:
         return cls._decoders.get(data_type)
 
 class MedidorAguaBase(IMedidorAgua):
-    """Implementación base para medidores de agua"""
+    """Implementación base PURA. Maneja solo la conexión y la lectura cruda."""
     DECODER_FACTORY = DecoderFactory
     
     def __init__(self, perfil_sensor: Dict[str, Any], error_handler: ErrorHandler):
@@ -266,15 +266,13 @@ class MedidorAguaBase(IMedidorAgua):
             self.client = original_client
 
     def leer_registros(self) -> Dict[str, RegisterValue]:
-        """Lee registros con protección mejorada"""
-        # VERIFICAR SI DEBERÍAMOS INTENTAR LECTURA
+        """Lee registros genéricos. El post-procesamiento se delega a las clases hijas."""
         if self._consecutive_errors >= self._max_consecutive_errors:
             self.logger.warning("Demasiados errores consecutivos, omitiendo lectura")
             return {}
             
         with self._connection_lock:
             start_time = time.time()
-            
             try:
                 if not self.client.connected and not self.conectar():
                     self._consecutive_errors += 1
@@ -283,82 +281,29 @@ class MedidorAguaBase(IMedidorAgua):
                 resultados = {}
                 registros_a_leer = list(self.perfil["registros"].keys())
                 
-                # LIMITAR CANTIDAD DE REGISTROS POR CICLO
                 if len(registros_a_leer) > 10:
-                    self.logger.warning(f"Demasiados registros ({len(registros_a_leer)}), limitando a 10")
                     registros_a_leer = registros_a_leer[:10]
                 
                 for reg_name in registros_a_leer:
-                    # VERIFICAR TIMEOUT GLOBAL
                     if time.time() - start_time > self._adaptive_timeout * 2:
-                        self.logger.warning("Timeout global excedido, cancelando lecturas restantes")
                         break
                     try:
                         resultados[reg_name] = self._leer_registro(reg_name)
-                    except ModbusException as e:
-                        # APORTACIÓN 1: Simplificar la excepción para el filtro anti-spam
-                        self.error_handler.log_error("007", f"Error de lectura en registro: {reg_name}", es_error_sistema=True)
-                        resultados[reg_name] = None
-                        self._consecutive_errors += 1
                     except Exception as e:
-                        self.error_handler.log_error("007", f"Error decodificando registro: {reg_name}", es_error_sistema=True)
+                        self.error_handler.log_error("007", f"Error en registro: {reg_name}", es_error_sistema=True)
                         resultados[reg_name] = None
                         self._consecutive_errors += 1
 
-                # POST-PROCESAMIENTO Y RESET DE CONTADOR SI EXITOSO
                 if resultados and any(v is not None for v in resultados.values()):
                     self._consecutive_errors = 0
-                    logging.info(f"✅ Lectura exitosa con {len(resultados)} registros")
-                else:
-                    logging.warning("⚠️ Lectura devolvió resultados vacíos o todos None")
-                    
-                    if self.perfil.get("tipo_medidor") == "ISOMAG":
-                        resultados = self._postprocesar_isomag(resultados)
+                    # DELEGACIÓN AL POLIMORFISMO: Las clases hijas post-procesan
+                    resultados = self._postprocesar_resultados(resultados)
                 
                 return resultados
                 
             except Exception as e:
                 self._handle_connection_error(e)
                 return {}
-
-    def _postprocesar_isomag(self, resultados):
-        """Post-procesa los resultados para ISOMAG y los mapea al formato estándar"""
-        # Mapear flags de proceso a campos estándar
-        if "flags_proceso" in resultados and isinstance(resultados["flags_proceso"], dict):
-            flags = resultados["flags_proceso"]
-            
-            # Mapear dirección de flujo (Bit 5 de flags1)
-            if flags.get("flow_direction_negative"):
-                resultados["direccion_flujo"] = 2  # Flujo negativo
-            else:
-                resultados["direccion_flujo"] = 1  # Flujo positivo
-            
-            # Mapear errores del sensor desde flags2
-            errores_sensor = {}
-            
-            # CORRECCIÓN: Registrar errores del ISOMAG durante el postprocesamiento
-            if flags.get("pipe_empty"):
-                errores_sensor["empty_pipe"] = True
-                self.error_handler.log_error("120", "ISOMAG - Tubería vacía detectada", es_error_sistema=False)
-            
-            if flags.get("flow_rate_overflow"):
-                errores_sensor["over_range"] = True
-                self.error_handler.log_error("127", "ISOMAG - Desbordamiento de flujo", es_error_sistema=False)
-            
-            if flags.get("coils_excitation_error") or flags.get("input_signal_error"):
-                errores_sensor["sensor_fault"] = True
-                if flags.get("coils_excitation_error"):
-                    self.error_handler.log_error("121", "ISOMAG - Error de excitación de bobinas", es_error_sistema=False)
-                if flags.get("input_signal_error"):
-                    self.error_handler.log_error("122", "ISOMAG - Error de señal de entrada", es_error_sistema=False)
-            
-            resultados["errores_sensor"] = errores_sensor if errores_sensor else {
-                "sensor_fault": False,
-                "over_range": False, 
-                "empty_pipe": False
-            }
-        
-        return resultados
 
     def _leer_registro(self, reg_name: str) -> RegisterValue:
         """Lee un registro individual con reintentos"""
@@ -406,60 +351,14 @@ class MedidorAguaBase(IMedidorAgua):
                 time.sleep(0.2)
                 self.conectar()
 
+    @abstractmethod
     def leer_estado_medidor(self) -> Dict[str, Any]:
-        """
-        Lee el estado del medidor.
-        Para Badger: registro 0x0106
-        Para ISOMAG: registro 0020 (Process Flags)
-        """
-        with self._connection_lock:
-            if not self.client.connected and not self.conectar():
-                return {}
-
-            try:
-                tipo_medidor = self.perfil.get("tipo_medidor", "Desconocido")
-                
-                if tipo_medidor == "ISOMAG":
-                    # Para ISOMAG, leer registro de flags de proceso (0020)
-                    response = self.client.read_input_registers(
-                        address=20,  # Registro 0020 para flags de proceso ISOMAG
-                        count=1,
-                        slave=self.perfil["slave_id"]
-                    )
-                    
-                    if response.isError():
-                        return {}
-                    
-                    meter_status = response.registers[0]
-                    
-                    # CORRECCIÓN: Pasar el tipo de medidor a log_meter_error
-                    self.error_handler.log_meter_error(meter_status, tipo_medidor="ISOMAG")
-                    
-                else:
-                    # Para Badger M2000, leer registro de estado estándar
-                    response = self.client.read_input_registers(
-                        address=0x0106,  # Meter Status para Badger
-                        count=1,
-                        slave=self.perfil["slave_id"]
-                    )
-                    
-                    if response.isError():
-                        return {}
-                    
-                    meter_status = response.registers[0]
-                    
-                    # CORRECCIÓN: Pasar el tipo de medidor a log_meter_error
-                    self.error_handler.log_meter_error(meter_status, tipo_medidor="Badger M2000")
-
-                return {
-                    'meter_status': meter_status,
-                    'timestamp': time.time()
-                }
-                
-            except Exception as e:
-                # Este es un error del SISTEMA (comunicación)
-                self.error_handler.log_error("007", f"Error leyendo estado medidor: {str(e)}", es_error_sistema=True)
-                return {}
+        """Método abstracto: Cada medidor debe saber cómo leer su propio estado"""
+        pass
+	
+    def _postprocesar_resultados(self, resultados: Dict[str, Any]) -> Dict[str, Any]:
+        """Método virtual: Las clases hijas pueden sobreescribirlo si necesitan procesar banderas"""
+        return resultados
 
     def obtener_unidad_flujo(self) -> str:
         """Obtiene la unidad de flujo con caché para mejor rendimiento"""
@@ -488,3 +387,99 @@ class MedidorAguaBase(IMedidorAgua):
                     self.logger.info("Conexión Modbus cerrada correctamente")
                 except Exception as e:
                     self.error_handler.log_error("015", f"Error desconexión: {e}")
+
+# =========================================================================
+# CLASES ESPECIALIZADAS POR FABRICANTE (PATRÓN STRATEGY / POLIMORFISMO)
+# =========================================================================
+
+class MedidorBadgerM2000(MedidorAguaBase):
+    """Especialización para medidores Badger M2000"""
+    
+    def leer_estado_medidor(self) -> Dict[str, Any]:
+        with self._connection_lock:
+            if not self.client.connected and not self.conectar():
+                return {}
+            try:
+                # Badger lee el Meter Status en el registro 0x0106
+                response = self.client.read_input_registers(address=0x0106, count=1, slave=self.perfil["slave_id"])
+                if response.isError():
+                    return {}
+                
+                meter_status = response.registers[0]
+                self.error_handler.log_meter_error(meter_status, tipo_medidor="Badger M2000")
+                
+                return {'meter_status': meter_status, 'timestamp': time.time()}
+            except Exception as e:
+                self.error_handler.log_error("007", f"Error leyendo estado Badger: {str(e)}", es_error_sistema=True)
+                return {}
+
+class MedidorISOMAG(MedidorAguaBase):
+    """Especialización para medidores ISOMAG"""
+    
+    def leer_estado_medidor(self) -> Dict[str, Any]:
+        with self._connection_lock:
+            if not self.client.connected and not self.conectar():
+                return {}
+            try:
+                # ISOMAG lee los Process Flags en el registro 0020
+                response = self.client.read_input_registers(address=20, count=1, slave=self.perfil["slave_id"])
+                if response.isError():
+                    return {}
+                
+                meter_status = response.registers[0]
+                self.error_handler.log_meter_error(meter_status, tipo_medidor="ISOMAG")
+                
+                return {'meter_status': meter_status, 'timestamp': time.time()}
+            except Exception as e:
+                self.error_handler.log_error("007", f"Error leyendo estado ISOMAG: {str(e)}", es_error_sistema=True)
+                return {}
+
+    def _postprocesar_resultados(self, resultados: Dict[str, Any]) -> Dict[str, Any]:
+        """Aplica la lógica específica de decodificación de banderas del ISOMAG"""
+        if "flags_proceso" in resultados and isinstance(resultados["flags_proceso"], dict):
+            flags = resultados["flags_proceso"]
+            
+            # Dirección de flujo
+            if flags.get("flow_direction_negative"):
+                resultados["direccion_flujo"] = 2  # Negativo
+            else:
+                resultados["direccion_flujo"] = 1  # Positivo
+            
+            # Errores
+            errores_sensor = {}
+            if flags.get("pipe_empty"):
+                errores_sensor["empty_pipe"] = True
+                self.error_handler.log_error("120", "ISOMAG - Tubería vacía", es_error_sistema=False)
+            
+            if flags.get("flow_rate_overflow"):
+                errores_sensor["over_range"] = True
+                self.error_handler.log_error("127", "ISOMAG - Desbordamiento", es_error_sistema=False)
+            
+            if flags.get("coils_excitation_error") or flags.get("input_signal_error"):
+                errores_sensor["sensor_fault"] = True
+                
+            resultados["errores_sensor"] = errores_sensor if errores_sensor else {
+                "sensor_fault": False, "over_range": False, "empty_pipe": False
+            }
+        return resultados
+
+# =========================================================================
+# FACTORÍA DE MEDIDORES
+# =========================================================================
+
+class FabricaMedidores:
+    """Instancia la clase correcta basada en la configuración del usuario"""
+    
+    @staticmethod
+    def crear_medidor(perfil_sensor: Dict[str, Any], error_handler: ErrorHandler) -> IMedidorAgua:
+        tipo = perfil_sensor.get("tipo_medidor", "Desconocido")
+        
+        if tipo == "Badger M2000":
+            return MedidorBadgerM2000(perfil_sensor, error_handler)
+        elif tipo == "ISOMAG":
+            return MedidorISOMAG(perfil_sensor, error_handler)
+        else:
+            # Fallback genérico o levantar excepción
+            logging.warning(f"Tipo de medidor '{tipo}' no soportado específicamente. Usando clase base.")
+            # Para evitar crasheos, podemos devolver un Badger por defecto, pero lo ideal es fallar limpiamente
+            return MedidorBadgerM2000(perfil_sensor, error_handler)
