@@ -3,10 +3,11 @@
 import logging
 import os
 import time
-from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox
+from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QPushButton, QMessageBox
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QObject
 from PyQt5.QtGui import QColor, QPalette, QFont, QPixmap
 from Core.DataProcessing.Services import UnitConverter
+from Core.DataProcessing.DataProcessor import DataProcessor
 from Core.System.ConfigManager import ConfigManager
 from Core.System.ErrorHandler import ErrorHandler
 from Core.System.StateManager import StateManager
@@ -60,8 +61,12 @@ class DashboardWindow(QWidget):
         super().__init__()
         self.medidor = medidor
         self.error_handler = error_handler
+        
         self.config_manager = ConfigManager()
         self.unit_converter = UnitConverter()
+        
+        # NUEVO: Instanciamos el procesador de datos usando tu UnitConverter y ErrorHandler
+        self.data_processor = DataProcessor(self.unit_converter, self.error_handler)
         
         self.unidad_medidor = "m³/h"
         self.unidad_visual = self.config_manager.cargar_config_general().get("unidad_visualizacion", "m³/h")
@@ -245,6 +250,25 @@ class DashboardWindow(QWidget):
         
         data_group.setLayout(data_layout)
         main_layout.addWidget(data_group)
+       
+        # ✅ PANEL DE CONTROL DE TELEMETRÍA (Auto-Arranque manual)
+        panel_control_hardware = QGroupBox("⚙️ Control de Telemetría (Modbus)")
+        layout_control = QHBoxLayout()
+        
+        self.btn_iniciar_lecturas = QPushButton("▶️ Comenzar Lecturas")
+        self.btn_iniciar_lecturas.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px;")
+        self.btn_iniciar_lecturas.clicked.connect(self._iniciar_telemetria)
+        
+        self.btn_detener_lecturas = QPushButton("⏹️ Detener Lecturas")
+        self.btn_detener_lecturas.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 10px;")
+        self.btn_detener_lecturas.clicked.connect(self._detener_telemetria)
+        self.btn_detener_lecturas.setEnabled(False) # Inicia deshabilitado
+        
+        layout_control.addWidget(self.btn_iniciar_lecturas)
+        layout_control.addWidget(self.btn_detener_lecturas)
+        panel_control_hardware.setLayout(layout_control)
+        
+        main_layout.addWidget(panel_control_hardware)
         
         info_layout = QHBoxLayout()
         info_layout.setSpacing(10)
@@ -317,7 +341,7 @@ class DashboardWindow(QWidget):
         self.setLayout(main_layout)
 
     def setup_timers(self):
-        """Configura timers de forma segura"""
+        """Configura timers de forma segura. Timers de hardware inician pausados."""
         # TIMER DE INTERFAZ (RÁPIDO) - EN HILO PRINCIPAL
         self.ui_timer = QTimer(self)
         self.ui_timer.timeout.connect(self.actualizar_ui)
@@ -326,7 +350,7 @@ class DashboardWindow(QWidget):
         # TIMER DE LECTURA (LENTO) - EN HILO DE TRABAJO
         self.read_timer = QTimer(self)
         self.read_timer.timeout.connect(self.iniciar_lectura_segura)
-        self.read_timer.start(30000)  # 30 segundos para lecturas
+        # ❌ NO DAMOS START AQUÍ
         
         self.unit_timer = QTimer(self)
         self.unit_timer.timeout.connect(self.actualizar_unidades)
@@ -334,7 +358,7 @@ class DashboardWindow(QWidget):
         
         self.connection_timer = QTimer(self)
         self.connection_timer.timeout.connect(self.verificar_conexion)
-        self.connection_timer.start(30000)
+        # ❌ NO DAMOS START AQUÍ
         
         # INICIAR WORKER
         self.setup_worker()
@@ -362,9 +386,13 @@ class DashboardWindow(QWidget):
             # Ejecutar en el hilo del worker
             QTimer.singleShot(0, self.worker.read_data)
 
-    def procesar_datos(self, datos):
+    def procesar_datos(self, datos_crudos):
         """Procesa datos recibidos del worker (en hilo principal)"""
         try:
+            
+            # Transformamos los datos crudos del medidor usando la escala configurada en ConfigWindow
+            datos = self.data_processor.process(datos_crudos, self.medidor.perfil)
+            
             # ========== VERIFICACIÓN PARA RESET KER ==========
             
             # Si tenemos datos válidos y el sistema está operativo, resetear KER
@@ -515,12 +543,21 @@ class DashboardWindow(QWidget):
 
     def actualizar_unidades(self):
         try:
-            if self.medidor and hasattr(self.medidor, 'obtener_unidad_flujo'):
+            # 1. Solo consultar al medidor si las lecturas están activas
+            if self.read_timer.isActive() and self.medidor and hasattr(self.medidor, 'obtener_unidad_flujo'):
                 self.unidad_medidor = self.medidor.obtener_unidad_flujo()
+            else:
+                # Si está pausado, usamos la caché del perfil o un valor por defecto
+                if self.medidor and hasattr(self.medidor, 'perfil'):
+                    self.unidad_medidor = self.medidor.perfil.get("unidad_flujo_default", "m³/h")
+                else:
+                    self.unidad_medidor = "m³/h"
             
+            # 2. Cargar configuración visual de todas formas
             config = self.config_manager.cargar_config_general()
             self.unidad_visual = config.get("unidad_visualizacion", "m³/h")
             
+            # 3. Actualizar la interfaz
             self.medidor_unit_label.setText(f"Medidor: {self.unidad_medidor}")
             self.visual_unit_label.setText(f"Visualización: {self.unidad_visual}")
             self.flow_unit.setText(self.unidad_visual)
@@ -583,3 +620,42 @@ class DashboardWindow(QWidget):
             self.connection_timer.stop()
         
         event.accept()
+
+    def _iniciar_telemetria(self):
+        """Inicia el hilo de lectura Modbus a petición del usuario"""
+        import os
+        from Core.System.PathManager import path_manager
+        
+        config_path = path_manager.get_config_path("sensor_config.json")
+        if not os.path.exists(config_path):
+            QMessageBox.warning(self, "Atención", "No hay configuración de sensor guardada. Vaya a Configuración Hardware primero.")
+            return
+
+        # Solo arrancamos los temporizadores locales del Dashboard
+        self.read_timer.start(30000)
+        self.connection_timer.start(30000)
+        
+        # Ejecutar primera lectura inmediata
+        self.iniciar_lectura_segura()
+            
+        self.btn_iniciar_lecturas.setEnabled(False)
+        self.btn_detener_lecturas.setEnabled(True)
+        self.btn_iniciar_lecturas.setText("Lecturas en Proceso...")
+
+    def _detener_telemetria(self):
+        """Detiene el hilo de lectura de forma segura"""
+        self.read_timer.stop()
+        self.connection_timer.stop()
+            
+        self.btn_iniciar_lecturas.setEnabled(True)
+        self.btn_detener_lecturas.setEnabled(False)
+        self.btn_iniciar_lecturas.setText("▶️ Comenzar Lecturas")
+        self.connection_status.setText("Detenido (Manual)")
+        self.connection_status.setProperty("class", "stopped-flow")
+        self.style().unpolish(self.connection_status)
+        self.style().polish(self.connection_status)
+
+    def actualizar_referencia_worker(self, nuevo_medidor):
+        """Actualiza el medidor del worker cuando ConfigWindow cambia de medidor"""
+        if self.worker:
+            self.worker.medidor = nuevo_medidor

@@ -14,6 +14,7 @@ from GUI.Windows.ReportsWindow import ReportsWindow
 from GUI.Windows.ErrorConsoleWindow import ErrorConsoleWindow
 from GUI.Windows.FTPConaguaWindow import FTPConaguaWindow
 from Core.System.ConfigManager import ConfigManager
+from Core.Hardware.ModbusRTU_Manager import FabricaMedidores
 from PyQt5.QtCore import QTimer
 
 class MainWindow(FramelessWindow):
@@ -346,8 +347,8 @@ class MainWindow(FramelessWindow):
             self.error_handler.log_error("301", "Todos los perfiles de sensor están deshabilitados", es_error_sistema=True)
             return
         
-        # Crear el medidor con el perfil activo
-        self.medidor = MedidorAguaBase(
+        # ✅ AQUÍ ENTRA LA FÁBRICA: Crea el medidor exacto según el perfil
+        self.medidor = FabricaMedidores.crear_medidor(
             perfil_sensor=active_profile,
             error_handler=self.error_handler
         )
@@ -373,6 +374,33 @@ class MainWindow(FramelessWindow):
         
         # Mostrar estado
         self.show_warning("✅ Sistema operativo iniciado")
+
+    def actualizar_medidor_global(self, nuevo_perfil):
+        """Crea un nuevo medidor basado en el perfil y lo distribuye a todo el sistema"""
+        # 1. Detenemos lecturas activas en el dashboard si existen
+        if hasattr(self.dashboard_window, '_detener_telemetria'):
+            self.dashboard_window._detener_telemetria()
+            
+        # 2. Desconectamos el medidor viejo para liberar el puerto COM
+        if hasattr(self, 'medidor') and self.medidor:
+            self.medidor.desconectar()
+
+        # 3. Usamos la fábrica para crear la nueva instancia
+        self.medidor = FabricaMedidores.crear_medidor(
+            perfil_sensor=nuevo_perfil,
+            error_handler=self.error_handler
+        )
+
+        # 4. Actualizamos el sistema globalmente
+        StateManager.set_state('medidor', self.medidor)
+        self.dashboard_window.medidor = self.medidor
+        self.config_window.medidor = self.medidor
+
+        # 5. Re-vinculamos el nuevo medidor en el worker del dashboard
+        if hasattr(self.dashboard_window, 'actualizar_referencia_worker'):
+            self.dashboard_window.actualizar_referencia_worker(self.medidor)
+            
+        return self.medidor
         
     
     # Añadir estos métodos a la clase MainWindow
@@ -384,8 +412,15 @@ class MainWindow(FramelessWindow):
         self.monitor_timer.start(40000)  # 40 segundos en lugar de 60 segundos
 
     def verificar_estado_medidor(self):
-        """Verificación básica del estado del medidor"""
+        """Verificación básica del estado del medidor (solo si las lecturas están activas)"""
         try:
+            # 1. Comprobamos si el Dashboard ha encendido los timers (Lecturas activas)
+            # Esto evita que el monitor bombardee el puerto antes de que el usuario lo solicite
+            if hasattr(self, 'dashboard_window'):
+                if not self.dashboard_window.read_timer.isActive():
+                    return # Salimos en silencio, el sistema está en pausa
+            
+            # 2. Si las lecturas están activas, procedemos con la verificación normal
             if hasattr(self, 'medidor') and self.medidor:
                 estado = self.medidor.leer_estado_medidor()
                 if estado and estado.get('meter_status', 0) == 0:
