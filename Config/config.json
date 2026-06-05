@@ -5,7 +5,7 @@
     "NSUT": "TEST-201",
     "Lat": 19.01714246158,
     "Long": -98.2583521089,
-    "unidad_visualizacion": "L/s",
+    "unidad_visualizacion": "m³/h",
     "storage_path": "C:\\Users\\ahuer\\OneDrive\\Desktop",
     "hora_reporte": "18:40",
     "report_type": "SistemaMedicion"

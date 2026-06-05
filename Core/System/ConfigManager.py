@@ -17,7 +17,7 @@ class ConfigManager:
     
     # ✅ CONSTANTES PARA NIPs POR DEFECTO
     NIP_TESERACTO_DEFAULT = "1974"
-    NIP_GENERICO_DEFAULT = ""
+    NIP_GENERICO_DEFAULT = "0000"
 
     @staticmethod
     def _validar_unidad(unidad: str):
@@ -78,24 +78,44 @@ class ConfigManager:
     # ✅ NUEVO: MÉTODOS PARA GESTIÓN DE NIPs DE VENTANAS
     @classmethod
     def cargar_nips_ventanas(cls) -> Dict[str, Any]:
-        """Carga la configuración de NIPs para ventanas bloqueadas"""
+        """Carga la configuración de NIPs y procesa el archivo de distribución de fábrica"""
         if 'nips_ventanas' in cls._cache:
             return cls._cache['nips_ventanas']
             
         config_path = path_manager.get_config_path("nip_config.json")
         nips = cls._cargar_archivo(config_path)
         
+        necesita_guardar = False
+        
         if not nips:
-            logger.warning("Archivo nip_config.json no encontrado, creando configuración inicial")
+            # Fallback en caso de que el archivo no exista en lo absoluto
+            logger.warning("Archivo nip_config.json no encontrado, creando inicial de respaldo")
             nips = {
                 "FTPConaguaWindow": {
                     "nip_teseracto": pbkdf2_sha256.hash(cls.NIP_TESERACTO_DEFAULT, salt_size=16),
                     "nip_generico": pbkdf2_sha256.hash(cls.NIP_GENERICO_DEFAULT, salt_size=16),
-                    "nip_unidad_inspeccion": None  # Se configurará posteriormente
+                    "nip_unidad_inspeccion": ""
                 }
             }
+            necesita_guardar = True
+        else:
+            if "FTPConaguaWindow" not in nips:
+                nips["FTPConaguaWindow"] = {}
+                
+            ventana_nips = nips["FTPConaguaWindow"]
+            
+            # ✅ DETECCIÓN DE DISTRIBUCIÓN: Si los campos base vienen como "", se genera su hash seguro
+            if ventana_nips.get("nip_teseracto") == "":
+                ventana_nips["nip_teseracto"] = pbkdf2_sha256.hash(cls.NIP_TESERACTO_DEFAULT, salt_size=16)
+                necesita_guardar = True
+                
+            if ventana_nips.get("nip_generico") == "":
+                ventana_nips["nip_generico"] = pbkdf2_sha256.hash(cls.NIP_GENERICO_DEFAULT, salt_size=16)
+                necesita_guardar = True
+                
+        if necesita_guardar:
             cls._guardar_archivo(config_path, nips)
-        
+            
         cls._cache['nips_ventanas'] = nips
         return nips
 
@@ -146,11 +166,16 @@ class ConfigManager:
 
     @classmethod
     def existe_nip_unidad_inspeccion(cls, ventana: str) -> bool:
-        """Verifica si ya existe un NIP de unidad de inspección configurado"""
+        """Verifica estrictamente si el operador ya registró un NIP válido"""
         nips = cls.cargar_nips_ventanas()
         ventana_nips = nips.get(ventana, {})
-        return ventana_nips.get("nip_unidad_inspeccion") is not None
-
+        nip = ventana_nips.get("nip_unidad_inspeccion")
+        
+        # ✅ EVALUACIÓN ESTRICTA: Si es None, "" o espacios, devuelve False.
+        # Esto garantiza que el software detecte que NO está registrado el NIP del operador
+        # y rutee el flujo directamente a la 'ConfiguracionInicialDialog'.
+        return bool(nip and nip.strip())
+    
     @classmethod
     def cambiar_nip_teseracto(cls, nuevo_nip: str) -> None:
         """Permite cambiar el NIP Teseracto (solo para administradores)"""
