@@ -42,7 +42,7 @@ class FileScheduler:
         self._consecutive_failures = 0
         
         self.email_config = self._cargar_config_email()
-        self.backup_dir = path_manager.get_base_path() / "backups_envios"
+        self.backup_dir = path_manager.get_writable_path() / "backups_envios"
         self.backup_dir.mkdir(exist_ok=True)
         self._verificar_estructura_directorios()
         
@@ -205,7 +205,7 @@ class FileScheduler:
     def _guardar_log_envio_detallado(self, inicio: datetime, resultados: list, modo: str):
         """Genera un reporte JSON detallado de la sesión de envío."""
         try:
-            log_dir = path_manager.get_base_path() / "logs_envios"
+            log_dir = path_manager.get_writable_path() / "logs_envios"
             log_dir.mkdir(exist_ok=True)
             
             timestamp = inicio.strftime('%Y%m%d_%H%M%S')

@@ -4,8 +4,19 @@
 import sys
 import os
 import logging
+import ctypes
+
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import QMetaType, QTimer
+from PyQt5.QtGui import QIcon
+
+# Establecer AppUserModelID para el icono en la barra de tareas
+if sys.platform == 'win32':
+    try:
+        app_id = 'TesseractLabs.TESSERACTO-UTR'
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except:
+        pass
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -48,7 +59,7 @@ class TesseractApp(QApplication):
         self.login_window.window_closed.connect(self.quit)
         self.login_window.show()
 
-# 3. Reemplaza el método quit (para detener la USB al cerrar)
+    # 3. método quit (para detener la USB al cerrar)
     def quit(self):
         """Cierra la aplicación completamente de forma segura"""
         logging.info("Iniciando secuencia de apagado seguro...")
@@ -162,4 +173,5 @@ class TesseractApp(QApplication):
 
 if __name__ == "__main__":
     app = TesseractApp(sys.argv)
+    app.setWindowIcon(QIcon(str(path_manager.get_image_path('TESERACTO.ico'))))
     sys.exit(app.exec_())

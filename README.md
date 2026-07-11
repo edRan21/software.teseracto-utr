@@ -17,7 +17,7 @@
 
 <i>Asegurate de estar dentro del repositorio ya que este es privado, cualquier problema técnico comunicalo al administrador</i>
 
-<i>Asegurese de no arrastrar o clonar el repositorio con la carpeta del entorno virtual creado "venv", ya que esta puede generar conflictos con las rutas de ejecución del proyecto, al clonar el repositorio usted mismo debe crear un entorno virtual, tener Python 3.13.2 como versión e instalar las librerias utilizadas con:<i>
+<i>Asegurese de no arrastrar o clonar el repositorio con la carpeta del entorno virtual creado "venv", ya que esta puede generar conflictos con las rutas de ejecución del proyecto, al clonar el repositorio usted mismo debe crear un entorno virtual, tener Python 3.13.2 como versión e instalar las librerias utilizadas con:</i>
 
 ```
 python -m venv venv
@@ -52,6 +52,29 @@ pyinstaller TESSERACTO-UTR.spec
 <p>Hacemos uso de la librería de pyinstaller para compilar y generar un ejecutable, <b>es importante que copies manualmente las images y los archivos de configuración .JSON a las carpetas que le corresponden ya que el sistema se quejará si no encuentra estos recursos para inicializar</b></p>
 
 >[!WARNING]
-> Al ejecutar el siguiente comando recordar que este se encarga de tomar todas la librerias instaladas y utilizadas en tu entorno local o en tu entorno virtual y crear un archivo con el que python podra utilizar para instalar de un solo golpe todas las bibliotecas del proyecto, CUIDADO, si tienes alguna otra libreria que no este siendo utilizada por el proyecto puede que el comando lo agregue en el archivo requirements.txt (ESTE Y TODOS LOS ANTERIORES COMANDOS DEBEN SER ESTUDIADOS PARA SU COMPRESIÓN):
+>Al ejecutar el siguiente comando recordar que este se encarga de tomar todas la librerias instaladas y utilizadas en tu entorno local o en tu entorno virtual y crear un archivo con el que python podra utilizar para instalar de un solo golpe todas las bibliotecas del proyecto, CUIDADO, si tienes alguna otra libreria que no este siendo utilizada por el proyecto puede que el comando lo agregue en el archivo requirements.txt (ESTE Y TODOS LOS ANTERIORES COMANDOS DEBEN SER ESTUDIADOS PARA SU COMPRESIÓN):
 >
 > pip freeze > requirements.txt
+
+
+>[!NOTE]
+>Utiliza el siguiente comando para automatizar la tarea de compilar el software y generar un empaquetamiento limpio de cualquier cache que interfiera con los paquetes del sistema.
+>
+> ./build.bat
+>
+>Recomendable utilizar este comando si continuamente empaqueta el software tras cada nueva integración que realice (es un script que automatiza la tarea de empaquetar el software con el .spec para pyinstaller de forma limpia y elimina el .exe que queda en la raiz de 'build/' ).
+
+Una vez que genere la carpeta <i>build/</i> junto con el programa del sistema de UTR, genere el instalador ejecutando el programa <i>instalador_TESSERACTO-UTR.exe</i>
+Cualquier modificación al instalador se realiza en el script de la raiz del proyecto NSIS <i>installer.nsi</n>, asegurese de tener instalado la extensión en VSCode de NSIS, los softwares de NSIS y HM NIS EDIT.
+Links de descarga:
+- .[NSIS: Archivos de sistema de instalación scriptable Nullsoft](https://sourceforge.net/projects/nsis/files/NSIS%203/3.12/nsis-3.12-setup.exe/download?use_mirror=cfhcable&download)
+- [HM NIS EDTI](https://sourceforge.net/projects/hmne/files/HM%20NIS%20Edit/2.0.3/nisedit2.0.3.exe/download?use_mirror=psychz&download)
+
+Si lo require, aquí podra escoger la versión de NSIS que desee instalar:
+- [versiones de NSIS, en la sección de 'files'](https://sourceforge.net/projects/nsis/files/NSIS%202/)
+
+Documentación de NSIS (sintaxis, herramientas, complementos):
+- [NSIS Docs/contents](https://nsis.sourceforge.io/Docs/Contents.html)
+
+>[!IMPORTANT]
+>Debe de asegurarse que después de empaquetar el software, se le debe generar un directorio en la raíz del proyecto llamado 'build/', donde dentro se encuentre el directorio 'TESSERACTO-UTR/' y que dentro guarde el ejecutable 'TESSERACTO-UTR.exe' y un directorio con las dependencias, binarios y recursos que utiliza el sistema llamado '_internal/'

@@ -1,12 +1,12 @@
 {
-    "RFC": "HUJL0108026H5",
-    "NSM": "TEST-123",
-    "NSUE": "TEST-123",
-    "NSUT": "TEST-201",
-    "Lat": 19.01714246158,
-    "Long": -98.2583521089,
+    "RFC": "",
+    "NSM": "",
+    "NSUE": "",
+    "NSUT": "",
+    "Lat": 0.0,
+    "Long": 0.0,
     "unidad_visualizacion": "m³/h",
-    "storage_path": "C:\\Users\\ahuer\\OneDrive\\Desktop",
-    "hora_reporte": "18:40",
-    "report_type": "SistemaMedicion"
+    "storage_path": "",
+    "hora_reporte": "00:00",
+    "report_type": "Medidor"
 }
