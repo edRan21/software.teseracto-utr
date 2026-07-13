@@ -3,7 +3,8 @@
 import logging
 import os
 import time
-from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QPushButton, QMessageBox
+from PyQt5.QtWidgets import (QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, 
+                             QGroupBox, QPushButton, QMessageBox, QScrollArea)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QObject
 from PyQt5.QtGui import QColor, QPalette, QFont, QPixmap
 from Core.DataProcessing.Services import UnitConverter
@@ -128,6 +129,19 @@ class DashboardWindow(QWidget):
         self.setStyleSheet(dark_theme)
 
     def setup_ui(self):
+        # ✅ NUEVO: ENVOLTORIO MAESTRO PARA PANTALLAS TÁCTILES
+        window_layout = QVBoxLayout()
+        window_layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        content_widget = QWidget()
+        content_widget.setStyleSheet("background-color: transparent;")
+        
+        # --- AQUÍ COMIENZA TU DISEÑO ORIGINAL EXACTO ---
         main_layout = QVBoxLayout()
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(20, 20, 20, 20)
@@ -239,7 +253,7 @@ class DashboardWindow(QWidget):
 
         data_layout.addWidget(velocity_container, 1, 2)
         
-        # --- DIRECCIÓN DE FLUJO (DEBAJO, ABARCANDO 3 COLUMNAS) ---
+        # --- DIRECCIÓN DE FLUJO ---
         direction_label = QLabel("DIRECCIÓN DE FLUJO:")
         direction_label.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
         data_layout.addWidget(direction_label, 2, 0, 1, 3)
@@ -251,7 +265,7 @@ class DashboardWindow(QWidget):
         data_group.setLayout(data_layout)
         main_layout.addWidget(data_group)
        
-        # ✅ PANEL DE CONTROL DE TELEMETRÍA (Auto-Arranque manual)
+        # ✅ PANEL DE CONTROL DE TELEMETRÍA 
         panel_control_hardware = QGroupBox("⚙️ Control de Telemetría (Modbus)")
         layout_control = QHBoxLayout()
         
@@ -292,12 +306,11 @@ class DashboardWindow(QWidget):
         self.lbl_errores.setProperty("class", "sensor-value")
         sensor_stats_layout.addWidget(self.lbl_errores, 1, 1)
         
-        # 🔧 CORRECCIÓN CRÍTICA: Cambiar de lbl_cod_error a lbl_codigo_error
         sensor_label_cod_error = QLabel("Código Error:")
         sensor_label_cod_error.setStyleSheet("font-weight: bold;")
         sensor_stats_layout.addWidget(sensor_label_cod_error, 2, 0)
         
-        self.lbl_codigo_error = QLabel("N/A")  # 🔧 NOMBRE CORREGIDO
+        self.lbl_codigo_error = QLabel("N/A") 
         self.lbl_codigo_error.setProperty("class", "error-code")
         sensor_stats_layout.addWidget(self.lbl_codigo_error, 2, 1)
         
@@ -338,7 +351,12 @@ class DashboardWindow(QWidget):
         
         main_layout.addLayout(bottom_layout)
         
-        self.setLayout(main_layout)
+        # ✅ CIERRE DEL ENVOLTORIO
+        content_widget.setLayout(main_layout)
+        scroll.setWidget(content_widget)
+        window_layout.addWidget(scroll)
+        
+        self.setLayout(window_layout)
 
     def setup_timers(self):
         """Configura timers de forma segura. Timers de hardware inician pausados."""
@@ -389,12 +407,10 @@ class DashboardWindow(QWidget):
     def procesar_datos(self, datos_crudos):
         """Procesa datos recibidos del worker (en hilo principal)"""
         try:
-            
             # Transformamos los datos crudos del medidor usando la escala configurada en ConfigWindow
             datos = self.data_processor.process(datos_crudos, self.medidor.perfil)
             
             # ========== VERIFICACIÓN PARA RESET KER ==========
-            
             # Si tenemos datos válidos y el sistema está operativo, resetear KER
             datos_son_validos = datos and any(v is not None for v in datos.values())
             
@@ -501,16 +517,15 @@ class DashboardWindow(QWidget):
                 self.lbl_errores.setText(", ".join(errores_text) if errores_text else "Ninguno")
                 
                 cod_error = datos.get('codigo_error', None)
-                # 🔧 USANDO EL NOMBRE CORREGIDO
                 if cod_error is not None:
                     self.lbl_codigo_error.setText(f"{cod_error:04X}")
                 else:
-                    self.lbl_codigo_error.setText("N/A")
+                   self.lbl_codigo_error.setText("N/A")
             
             except Exception as e:
                 # APORTACIÓN 1: Código oficial 010
                 self.error_handler.log_error("010", f"Error actualizando estadísticas visuales: {str(e)}", es_error_sistema=True)
-                
+            
         except Exception as e:
             # APORTACIÓN 1: Código oficial 010
             self.error_handler.log_error("010", f"Error procesando datos en dashboard: {str(e)}", es_error_sistema=True)

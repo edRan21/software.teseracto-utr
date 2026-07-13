@@ -40,7 +40,8 @@ class ConfigWindow(QWidget):
         medidor_layout = QFormLayout()
         
         self.cmb_tipo_medidor = QComboBox()
-        self.cmb_tipo_medidor.addItems(["Badger M2000", "ISOMAG MV110/MV210", "Personalizado"])
+        # ✅ NUEVO: Agregamos Siemens MAG 6000 a la lista
+        self.cmb_tipo_medidor.addItems(["Badger M2000", "ISOMAG MV110/MV210", "Siemens MAG 6000", "Personalizado"])
         self.cmb_tipo_medidor.currentIndexChanged.connect(self.on_tipo_medidor_changed)
         medidor_layout.addRow("Modelo del Medidor:", self.cmb_tipo_medidor)
         
@@ -196,6 +197,9 @@ class ConfigWindow(QWidget):
             self.cargar_configuracion_badger()
         elif tipo_medidor == "ISOMAG MV110/MV210":
             self.cargar_configuracion_isomag()
+        elif tipo_medidor == "Siemens MAG 6000":
+            # ✅ NUEVO: Llamada al cargador de Siemens
+            self.cargar_configuracion_siemens()
         else:  # Personalizado
             self.limpiar_formulario_personalizado()
 
@@ -251,6 +255,39 @@ class ConfigWindow(QWidget):
         self.chk_codigo_error.setChecked(True)
         
         self.lbl_status.setText("✅ Configuración ISOMAG MV110/MV210 cargada")
+        self.lbl_status.setStyleSheet("color: #27AE60;")
+
+    def cargar_configuracion_siemens(self):
+        """Carga configuración por defecto para Siemens MAG 6000"""
+        self.cmb_endianness.setCurrentIndex(0)  # Big Endian
+        self.cmb_word_order.setCurrentIndex(0)  # Big Endian
+        
+        # ✅ Direcciones base según manual Siemens (Holding Registers - Función 3)
+        self.reg_instant.setText("3002")       # 3002: Volume flow (Float32)
+        self.reg_accumulated.setText("3014")   # 3014: Totalizer 1 (Float64)
+        self.reg_unidad_flujo.setText("2906")  # 2906: Flow rate unit
+        self.reg_errores_sensor.setText("3200")# 3200: System status
+        self.reg_codigo_error.setText("3201")  # 3201: Error Pending 1
+        
+        # El Siemens no tiene direcciones Modbus simples para estos datos en el mapa estándar
+        self.reg_velocidad.clear()
+        self.reg_dir.clear()
+        self.reg_energizacion.clear()
+        
+        # Desmarcamos lo que no usaremos
+        self.chk_velocidad.setChecked(False)
+        self.chk_dir.setChecked(False)
+        self.chk_energizacion.setChecked(False)
+        
+        # Marcamos lo que sí usaremos
+        self.chk_unidad_flujo.setChecked(True)
+        self.chk_errores_sensor.setChecked(True)
+        self.chk_codigo_error.setChecked(True)
+        
+        self.txt_esc_instant.setText("1.0")
+        self.txt_esc_accum.setText("1.0")
+        
+        self.lbl_status.setText("✅ Configuración Siemens MAG 6000 cargada")
         self.lbl_status.setStyleSheet("color: #27AE60;")
 
     def limpiar_formulario_personalizado(self):
@@ -550,6 +587,9 @@ class ConfigWindow(QWidget):
         
         if tipo_medidor == "ISOMAG MV110/MV210":
             return self._collect_isomag_data()
+        elif tipo_medidor == "Siemens MAG 6000":
+            # ✅ NUEVO: Retornar los datos armados para Siemens
+            return self._collect_siemens_data()
         else:  # Badger M2000 y Personalizado
             return self._collect_generic_data()
 
@@ -616,6 +656,67 @@ class ConfigWindow(QWidget):
                 "funcion": 4
             }
         
+        return profile
+
+    def _collect_siemens_data(self):
+        """Recopila datos específicos para Siemens MAG 6000"""
+        profile = {
+            "puerto_serie": self.cmb_ports.currentText(),
+            "baudrate": int(self.cmb_baudrate.currentText()),
+            "parity": self.unmap_parity(self.cmb_parity.currentText()),
+            "stopbits": float(self.cmb_stopbits.currentText()),
+            "bytesize": 8,
+            "timeout": 5.0,
+            "slave_id": int(self.txt_slave_id.text()),
+            "endianness": "big",
+            "word_order": "big",
+            "funcion_default": 3,  # ✅ CRÍTICO: Siemens usa función 3 (Holding Registers)
+            "modelo": "Siemens SITRANS F MAG 6000",
+            "fabricante": "Siemens",
+            "tipo_medidor": "Siemens MAG 6000",
+            "registros": {
+                "flujo_instantaneo": {
+                    "address": int(self.reg_instant.text()),
+                    "count": 2,
+                    "data_type": "float32",
+                    "escala": float(self.txt_esc_instant.text()),
+                    "funcion": 3
+                },
+                "flujo_acumulado": {
+                    "address": int(self.reg_accumulated.text()),
+                    "count": 4,  # ✅ CRÍTICO: 4 registros = 8 bytes = Float64
+                    "data_type": "float64",
+                    "escala": float(self.txt_esc_accum.text()),
+                    "funcion": 3
+                }
+            }
+        }
+        
+        if self.chk_unidad_flujo.isChecked():
+            profile["registros"]["unidad_flujo"] = {
+                "address": int(self.reg_unidad_flujo.text()),
+                "count": 1,
+                "data_type": "int16", 
+                "no_escalar": True,
+                "funcion": 3
+            }
+            
+        if self.chk_errores_sensor.isChecked():
+            profile["registros"]["errores_sensor"] = {
+                "address": int(self.reg_errores_sensor.text()),
+                "count": 1,
+                "data_type": "int16", # Lo leeremos como entero para evaluar el 0xFFFF
+                "funcion": 3
+            }
+            
+        if self.chk_codigo_error.isChecked():
+            profile["registros"]["codigo_error"] = {
+                "address": int(self.reg_codigo_error.text()),
+                "count": 1,
+                "data_type": "int16",
+                "funcion": 3
+            }
+            
         return profile
 
     def _collect_generic_data(self):

@@ -4,14 +4,13 @@ block_cipher = None
 
 a = Analysis(
     ['GUI/App.py'],
-    pathex=[], 
+    pathex=[],
     binaries=[],
     datas=[
         ('Config/*.json', 'Config'),
         ('images/*.png', 'images'),
         ('images/*.jpeg', 'images'),
         ('images/*.ico', 'images'),
-        ('pendientes_usb', 'pendientes_usb')
     ],
     hiddenimports=[
         'psutil', 'pymodbus', 'passlib', 'apscheduler',
@@ -48,5 +47,20 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='images/TESERACTO.ico'
+    icon='images/TESERACTO.ico',
+)
+
+# ============================================================
+# PASO CRÍTICO: COLLECT genera la carpeta de distribución
+# con el ejecutable y todos los recursos.
+# ============================================================
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='TESSERACTO-UTR',
 )

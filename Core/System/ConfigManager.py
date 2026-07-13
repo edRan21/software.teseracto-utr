@@ -8,6 +8,7 @@ import logging
 from passlib.hash import pbkdf2_sha256
 from typing import Dict, Any, List, Optional
 from Core.System.PathManager import path_manager
+import shutil
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ class ConfigManager:
     
     # ✅ CONSTANTES PARA NIPs POR DEFECTO
     NIP_TESERACTO_DEFAULT = "1974"
-    NIP_GENERICO_DEFAULT = ""
+    NIP_GENERICO_DEFAULT = "0000"
 
     @staticmethod
     def _validar_unidad(unidad: str):
@@ -25,30 +26,28 @@ class ConfigManager:
         if unidad not in unidades_validas:
             raise ValueError(f"Unidad no válida: {unidad}. Use: {', '.join(unidades_validas)}")
     
+    # ------------------------------------------------------------------
+    # Métodos de carga/guardado (públicos) – Solo se modifica la lógica interna
+    # ------------------------------------------------------------------
     @classmethod
     def cargar_config_general(cls) -> Dict[str, Any]:
         if 'general' in cls._cache:
             return cls._cache['general']
-            
+        
+        cls._ensure_writable_config("config.json", {
+            "RFC": "", "NSM": "", "NSUE": "", "NSUT": "",
+            "Lat": 0.0, "Long": 0.0,
+            "unidad_visualizacion": "m³/h",
+            "storage_path": str(path_manager.get_storage_path())
+        })
+        
         config_path = path_manager.get_config_path("config.json")
         cfg = cls._cargar_archivo(config_path)
-        
-        # ✅ SOLO CARGAR - NUNCA CREAR ARCHIVOS AUTOMÁTICAMENTE
         if not cfg:
-            logger.warning("Archivo config.json no encontrado, usando valores por defecto en memoria")
-            return {
-                "RFC": "", "NSM": "", "NSUE": "", "NSUT": "",  # ✅ AGREGADO NSUT
-                "Lat": 0, "Long": 0,
-                "unidad_visualizacion": "m³/h",
-                "storage_path": str(path_manager.get_storage_path())
-            }
-        
-        for key in ["RFC", "NSM", "NSUE", "NSUT", "Lat", "Long"]:  # ✅ AGREGADO NSUT
-            if key not in cfg:
-                raise ValueError(f"Falta '{key}' en la configuración general")
-            
-        cfg.setdefault("unidad_visualizacion", "m³/h")
-        cfg.setdefault("storage_path", str(path_manager.get_storage_path()))
+            logger.warning("config.json corrupto, usando valores por defecto en memoria")
+            cfg = {"RFC":"","NSM":"","NSUE":"","NSUT":"","Lat":0.0,"Long":0.0,
+                   "unidad_visualizacion":"m³/h","storage_path":str(path_manager.get_storage_path())}
+        cfg = cls._sanitize_general_config(cfg)
         
         cls._cache['general'] = cfg
         return cfg
@@ -61,7 +60,6 @@ class ConfigManager:
         
         if "storage_path" not in config:
             config["storage_path"] = str(path_manager.get_storage_path())
-        
         if not cls._es_ruta_windows_valida(config["storage_path"]):
             config["storage_path"] = str(path_manager.get_storage_path())
         
@@ -78,24 +76,44 @@ class ConfigManager:
     # ✅ NUEVO: MÉTODOS PARA GESTIÓN DE NIPs DE VENTANAS
     @classmethod
     def cargar_nips_ventanas(cls) -> Dict[str, Any]:
-        """Carga la configuración de NIPs para ventanas bloqueadas"""
+        """Carga la configuración de NIPs y procesa el archivo de distribución de fábrica"""
         if 'nips_ventanas' in cls._cache:
             return cls._cache['nips_ventanas']
             
         config_path = path_manager.get_config_path("nip_config.json")
         nips = cls._cargar_archivo(config_path)
         
+        necesita_guardar = False
+        
         if not nips:
-            logger.warning("Archivo nip_config.json no encontrado, creando configuración inicial")
+            # Fallback en caso de que el archivo no exista en lo absoluto
+            logger.warning("Archivo nip_config.json no encontrado, creando inicial de respaldo")
             nips = {
                 "FTPConaguaWindow": {
                     "nip_teseracto": pbkdf2_sha256.hash(cls.NIP_TESERACTO_DEFAULT, salt_size=16),
                     "nip_generico": pbkdf2_sha256.hash(cls.NIP_GENERICO_DEFAULT, salt_size=16),
-                    "nip_unidad_inspeccion": None  # Se configurará posteriormente
+                    "nip_unidad_inspeccion": ""
                 }
             }
+            necesita_guardar = True
+        else:
+            if "FTPConaguaWindow" not in nips:
+                nips["FTPConaguaWindow"] = {}
+                
+            ventana_nips = nips["FTPConaguaWindow"]
+            
+            # ✅ DETECCIÓN DE DISTRIBUCIÓN: Si los campos base vienen como "", se genera su hash seguro
+            if ventana_nips.get("nip_teseracto") == "":
+                ventana_nips["nip_teseracto"] = pbkdf2_sha256.hash(cls.NIP_TESERACTO_DEFAULT, salt_size=16)
+                necesita_guardar = True
+                
+            if ventana_nips.get("nip_generico") == "":
+                ventana_nips["nip_generico"] = pbkdf2_sha256.hash(cls.NIP_GENERICO_DEFAULT, salt_size=16)
+                necesita_guardar = True
+                
+        if necesita_guardar:
             cls._guardar_archivo(config_path, nips)
-        
+            
         cls._cache['nips_ventanas'] = nips
         return nips
 
@@ -146,51 +164,45 @@ class ConfigManager:
 
     @classmethod
     def existe_nip_unidad_inspeccion(cls, ventana: str) -> bool:
-        """Verifica si ya existe un NIP de unidad de inspección configurado"""
+        """Verifica estrictamente si el operador ya registró un NIP válido"""
         nips = cls.cargar_nips_ventanas()
         ventana_nips = nips.get(ventana, {})
-        return ventana_nips.get("nip_unidad_inspeccion") is not None
-
+        nip = ventana_nips.get("nip_unidad_inspeccion")
+        
+        # ✅ EVALUACIÓN ESTRICTA: Si es None, "" o espacios, devuelve False.
+        # Esto garantiza que el software detecte que NO está registrado el NIP del operador
+        # y rutee el flujo directamente a la 'ConfiguracionInicialDialog'.
+        return bool(nip and nip.strip())
+    
     @classmethod
     def cambiar_nip_teseracto(cls, nuevo_nip: str) -> None:
         """Permite cambiar el NIP Teseracto (solo para administradores)"""
         cls.guardar_nip_ventana("FTPConaguaWindow", "nip_teseracto", nuevo_nip)
         logger.info("NIP Teseracto actualizado correctamente")
 
+
+    # Ejemplo con FTP y SMS (seguimos el mismo esquema, pero sin saneamiento complejo)
     @classmethod
     def cargar_config_ftp(cls) -> Dict[str, Any]:
         if 'ftp' in cls._cache:
             return cls._cache['ftp']
         
+        cls._ensure_writable_config("ftp_config.json", {
+            "host": "", "usuario": "", "clave": "",
+            "ruta_remota": "/", "port": 21, "timeout": 60, "secure": False
+        })
         config_path = path_manager.get_config_path("ftp_config.json")
         cfg = cls._cargar_archivo(config_path)
-        
-        # ✅ SOLO CARGAR - NUNCA CREAR ARCHIVOS AUTOMÁTICAMENTE
         if not cfg:
-            logger.warning("Archivo ftp_config.json no encontrado, usando valores por defecto en memoria")
-            return {
-                "host": "", "usuario": "", "clave": "",
-                "ruta_remota": "/", "port": 21, "timeout": 60, "secure": False
-            }
-        
-        # Validación mejorada que no lanza excepciones
-        config_valida = True
-        campos_requeridos = ["host", "usuario", "clave"]
-        
-        for campo in campos_requeridos:
-            if campo not in cfg or not cfg[campo]:
-                config_valida = False
-                cfg[campo] = ""
-        
-        # Establecer valores por defecto
+            cfg = {"host":"","usuario":"","clave":"","ruta_remota":"/","port":21,"timeout":60,"secure":False}
         cfg.setdefault("ruta_remota", "/")
         cfg.setdefault("port", 21)
+        try:
+            cfg["port"] = int(cfg["port"]) if cfg["port"] != "" else 21
+        except (ValueError, TypeError):
+            cfg["port"] = 21
         cfg.setdefault("timeout", 60)
         cfg.setdefault("secure", False)
-        
-        if not config_valida:
-            logger.warning("Configuración FTP incompleta, usando valores por defecto")
-        
         cls._cache['ftp'] = cfg
         return cfg
 
@@ -207,18 +219,11 @@ class ConfigManager:
     def cargar_config_sms(cls) -> Dict[str, Any]:
         if 'sms' in cls._cache:
             return cls._cache['sms']
-            
+        cls._ensure_writable_config("sms_config.json", {"numero_destino": "", "api_key": ""})
         config_path = path_manager.get_config_path("sms_config.json")
         cfg = cls._cargar_archivo(config_path)
-        
-        # ✅ SOLO CARGAR - NUNCA CREAR ARCHIVOS AUTOMÁTICAMENTE
         if not cfg:
-            logger.warning("Archivo sms_config.json no encontrado, usando valores por defecto en memoria")
-            return {"numero_destino": "", "api_key": ""}
-        
-        if "numero_destino" not in cfg:
-            raise ValueError(f"Falta 'numero_destino' en la configuración SMS")
-        cfg.setdefault("api_key", "")
+            cfg = {"numero_destino": "", "api_key": ""}
         cls._cache['sms'] = cfg
         return cfg
 
@@ -247,25 +252,21 @@ class ConfigManager:
 
     @classmethod
     def cargar_config_email(cls) -> Dict[str, Any]:
-        """Carga configuración de email desde email_config.json"""
         if 'email' in cls._cache:
             return cls._cache['email']
-        
+    
+        cls._ensure_writable_config("email_config.json", {
+            "smtp_server": "", "smtp_port": 587, "from": "", "to": [],
+            "subject": "Reporte Tesseract UTR", "username": "", "password": ""
+        })
         config_path = path_manager.get_config_path("email_config.json")
         cfg = cls._cargar_archivo(config_path)
-        
         if not cfg:
-            logger.warning("Archivo email_config.json no encontrado, usando valores por defecto")
-            return {
-                "smtp_server": "",
-                "smtp_port": 587,
-                "from": "",
-                "to": [],
-                "subject": "Reporte Tesseract UTR",
-                "username": "",
-                "password": ""
-            }
-        
+            logger.warning("Archivo email_config.json corrupto, usando valores por defecto")
+            cfg = {
+                "smtp_server": "", "smtp_port": 587, "from": "", "to": [],
+                "subject": "Reporte Tesseract UTR", "username": "", "password": ""
+        }
         cls._cache['email'] = cfg
         return cfg
 
@@ -273,15 +274,15 @@ class ConfigManager:
     def cargar_config_login(cls) -> Dict[str, Any]:
         if 'login' in cls._cache:
             return cls._cache['login']
-            
+    
+        cls._ensure_writable_config("login_config.json", {
+            "contraseña_maestra": "", "usuarios": {}
+        })
         config_path = path_manager.get_config_path("login_config.json")
         cfg = cls._cargar_archivo(config_path)
-        
-        # ✅ SOLO CARGAR - NUNCA CREAR ARCHIVOS AUTOMÁTICAMENTE
         if not cfg:
-            logger.warning("Archivo login_config.json no encontrado, usando valores por defecto en memoria")
-            return {"contraseña_maestra": "", "usuarios": {}}
-        
+            logger.warning("Archivo login_config.json corrupto, usando valores por defecto")
+            cfg = {"contraseña_maestra": "", "usuarios": {}}
         cls._cache['login'] = cfg
         return cfg
 
@@ -397,15 +398,15 @@ class ConfigManager:
     def cargar_config_sensor(cls) -> Dict[str, Any]:
         if 'sensor' in cls._cache:
             return cls._cache['sensor']
-            
+    
+        cls._ensure_writable_config("sensor_config.json", {
+            "sensores": [], "perfiles_predefinidos": []
+        })
         config_path = path_manager.get_config_path("sensor_config.json")
         cfg = cls._cargar_archivo(config_path)
-        
-        # ✅ SOLO CARGAR - NUNCA CREAR ARCHIVOS AUTOMÁTICAMENTE
         if not cfg:
-            logger.warning("Archivo sensor_config.json no encontrado, usando valores por defecto en memoria")
-            return {"sensores": [], "perfiles_predefinidos": []}
-        
+            logger.warning("Archivo sensor_config.json corrupto, usando valores por defecto")
+            cfg = {"sensores": [], "perfiles_predefinidos": []}
         cls._cache['sensor'] = cfg
         return cfg
 
@@ -505,8 +506,12 @@ class ConfigManager:
         cls._guardar_archivo(config_path, cfg)
         cls._cache.pop('general', None)
 
+    # ------------------------------------------------------------------
+    # Métodos privados de ayuda (persistencia + plantillas)
+    # ------------------------------------------------------------------
     @staticmethod
     def _cargar_archivo(ruta: str) -> Dict[str, Any]:
+        """Carga un archivo JSON o devuelve diccionario vacío si no existe."""
         if not os.path.exists(ruta):
             return {}
         with open(ruta, "r", encoding="utf-8") as f:
@@ -514,9 +519,48 @@ class ConfigManager:
 
     @staticmethod
     def _guardar_archivo(ruta: str, datos: Dict[str, Any]):
+        """Guarda un diccionario en un archivo JSON, creando directorios si es necesario."""
         os.makedirs(os.path.dirname(ruta), exist_ok=True)
         with open(ruta, "w", encoding="utf-8") as f:
             json.dump(datos, f, indent=4, ensure_ascii=False)
+
+    @classmethod
+    def _ensure_writable_config(cls, filename: str, default_values: Dict[str, Any]):
+        """
+        Garantiza que exista una versión escribible del archivo de configuración.
+        Si no existe, copia la plantilla desde la instalación; si la plantilla tampoco existe,
+        crea el archivo con los valores por defecto proporcionados.
+        """
+        writable_path = path_manager.get_config_path(filename)
+        if not writable_path.exists():
+            readonly_path = path_manager.get_readonly_config_path(filename)
+            if readonly_path.exists():
+                shutil.copy2(readonly_path, writable_path)
+                logger.info(f"Plantilla de configuración copiada a {writable_path}")
+            else:
+                cls._guardar_archivo(writable_path, default_values)
+                logger.info(f"Archivo de configuración creado con valores por defecto en {writable_path}")
+
+    @classmethod
+    def _sanitize_general_config(cls, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Asegura tipos correctos y valores por defecto para la configuración general."""
+        # Campos de texto
+        for campo in ["RFC", "NSM", "NSUE", "NSUT"]:
+            cfg.setdefault(campo, "")
+            if not isinstance(cfg[campo], str):
+                cfg[campo] = str(cfg[campo])
+        # Campos numéricos
+        for campo in ["Lat", "Long"]:
+            cfg.setdefault(campo, 0.0)
+            try:
+                cfg[campo] = float(cfg[campo]) if cfg[campo] != "" else 0.0
+            except (ValueError, TypeError):
+                cfg[campo] = 0.0
+        cfg.setdefault("unidad_visualizacion", "m³/h")
+        cfg.setdefault("storage_path", str(path_manager.get_storage_path()))
+        cfg.setdefault("hora_envio", "00:00")
+        cfg.setdefault("hora_reporte" "00:00")
+        return cfg
 
     @staticmethod
     def _validar_rfc(rfc: str):

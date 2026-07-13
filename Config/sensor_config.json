@@ -255,6 +255,41 @@
         "codigo_error"
       ],
       "widget_layout": "FULL"
+    },
+    {
+      "nombre": "Siemens MAG 6000",
+      "modelo": "Siemens SITRANS F MAG 6000",
+      "tipo_medidor": "Siemens MAG 6000",
+      "registros_habilitados": [
+        "flujo_instantaneo",
+        "flujo_acumulado"
+      ],
+      "widget_layout": "FULL",
+      "config_defaults": {
+        "baudrate": 19200,
+        "parity": "E",
+        "stopbits": 1,
+        "bytesize": 8,
+        "endianness": "big",
+        "word_order": "big",
+        "funcion_default": 3
+      },
+      "registros_mapping": {
+        "flujo_instantaneo": {
+          "address": 3002,
+          "count": 2,
+          "data_type": "float32",
+          "funcion": 3,
+          "descripcion": "Volumeflow"
+        },
+        "flujo_acumulado": {
+          "address": 3014,
+          "count": 4,
+          "data_type": "float64",
+          "funcion": 3,
+          "descripcion": "Totalizer 1 (Alta Precisión)"
+        }
+      }
     }
   ],
   "config_defaults": {

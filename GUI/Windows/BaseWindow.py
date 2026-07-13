@@ -13,7 +13,6 @@ class FramelessWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.FramelessWindowHint)
-        # Eliminamos WA_TranslucentBackground para evitar transparencias no deseadas
         
         # Variables para el arrastre de la ventana
         self.dragging = False
@@ -21,11 +20,61 @@ class FramelessWindow(QWidget):
         self.is_maximized = False
         self.previous_geometry = None
         
-        # Configurar estilo base solo para esta ventana
+        # ✅ ESTÁNDAR INDUSTRIAL: Barras de scroll táctiles y visibles de alto contraste
         self.setStyleSheet("""
             FramelessWindow {
                 background-color: #2b2b2b;
                 border-radius: 8px;
+            }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            /* Barra Vertical Táctil */
+            QScrollBar:vertical {
+                background-color: #2b2b2b;
+                width: 16px; /* Ancho cómodo para el dedo */
+                margin: 0px 0px 0px 0px;
+                border: none;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #5a5a5a; /* Gris de alto contraste */
+                min-height: 30px;
+                border-radius: 8px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #2E86C1; /* Color azul de acción del sistema al presionar */
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                background: none;
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            /* Barra Horizontal Táctil */
+            QScrollBar:horizontal {
+                background-color: #2b2b2b;
+                height: 16px;
+                margin: 0px 0px 0px 0px;
+                border: none;
+            }
+            QScrollBar::handle:horizontal {
+                background-color: #5a5a5a;
+                min-width: 30px;
+                border-radius: 8px;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background-color: #2E86C1;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                background: none;
+                width: 0px;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
             }
         """)
     

@@ -75,6 +75,23 @@ class UInt32Decoder(ModbusDecoderStrategy):
             wordorder=wordorder
         )
         return dec.decode_32bit_uint()
+    
+class Float64Decoder(ModbusDecoderStrategy):
+    def decodificar(self, registers, reg_config, perfil) -> float:
+        # OBTENER CONFIGURACIÓN DEL PERFIL
+        endianness = perfil.get("endianness", "big")
+        word_order = perfil.get("word_order", "big")
+        
+        byteorder = Endian.BIG if endianness == "big" else Endian.LITTLE
+        wordorder = Endian.BIG if word_order == "big" else Endian.LITTLE
+        
+        dec = BinaryPayloadDecoder.fromRegisters(
+            registers,
+            byteorder=byteorder,
+            wordorder=wordorder
+        )
+        # Decodificamos usando 64 bits sin escalados intrusivos
+        return dec.decode_64bit_float()
 
 class BitmaskDecoder(ModbusDecoderStrategy):
     def decodificar(self, registers, reg_config, perfil) -> Dict[str, bool]:
@@ -458,6 +475,53 @@ class MedidorISOMAG(MedidorAguaBase):
             }
         return resultados
 
+class MedidorSiemens(MedidorAguaBase):
+    def leer_estado_medidor(self) -> Dict[str, Any]:
+        """Lee el estado del sistema según el manual del Siemens (Registro 3201)"""
+        try:
+            # El Siemens usa Holding Registers (función 3). El registro 3201 tiene el error actual.
+            respuesta = self.client.read_holding_registers(address=3201, count=1, slave=self.slave_id)
+            if respuesta.isError():
+                return {"meter_status": 1, "error_code": "Error Modbus"}
+            
+            error_val = respuesta.registers[0]
+            
+            # El manual (Pág. 57) dicta que 0xFFFF (65535) significa 'No error'
+            if error_val != 65535:
+                # Si hay error, lo delegamos a nuestro ErrorHandler
+                self.error_handler.log_error("007", f"Siemens Reporta Código de Falla: {error_val}")
+                return {"meter_status": error_val, "error_code": str(error_val)}
+                
+            return {"meter_status": 0, "error_code": "OK"}
+        except Exception as e:
+            self.error_handler.log_error("007", f"Fallo leyendo estado Siemens: {e}")
+            return {"meter_status": 1, "error_code": str(e)}
+
+    def obtener_unidad_flujo(self) -> str:
+        """Lee la unidad de flujo directamente de la memoria del Siemens (Registro 2906)"""
+        ahora = time.time()
+        if ahora - self._ultima_lectura_unidad > 60:
+            try:
+                # Leer Holding Register 2906
+                respuesta = self.client.read_holding_registers(address=2906, count=1, slave=self.slave_id)
+                if not respuesta.isError():
+                    # Tabla de unidades Siemens (Pág 60-61 del manual)
+                    unidades_siemens = {
+                        0: "m³/s", 2: "L/s", 10: "USGPS", 16: "m³/min", 18: "L/min", 
+                        26: "USGPM", 32: "m³/h", 34: "L/h", 42: "USGPH", 48: "m³/d", 50: "L/d"
+                    }
+                    codigo = respuesta.registers[0]
+                    self._unidad_flujo_cache = unidades_siemens.get(codigo, "m³/h")
+                    self._ultima_lectura_unidad = ahora
+            except Exception as e:
+                self.error_handler.log_error("007", "Error leyendo unidad de flujo Siemens", es_error_sistema=True)
+                
+        return self._unidad_flujo_cache
+
+    def _postprocesar_resultados(self, resultados: Dict[str, RegisterValue]) -> Dict[str, RegisterValue]:
+        # El Siemens no requiere manipulación de bits posterior a la decodificación para los datos normales
+        return resultados
+    
 # =========================================================================
 # FACTORÍA DE MEDIDORES
 # =========================================================================
@@ -473,6 +537,8 @@ class FabricaMedidores:
             return MedidorBadgerM2000(perfil_sensor, error_handler)
         elif tipo == "ISOMAG":
             return MedidorISOMAG(perfil_sensor, error_handler)
+        elif tipo == "Siemens MAG 6000":
+            return MedidorSiemens(perfil_sensor, error_handler)
         else:
             # Fallback genérico o levantar excepción
             logging.warning(f"Tipo de medidor '{tipo}' no soportado específicamente. Usando clase base.")

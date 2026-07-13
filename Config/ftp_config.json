@@ -1,9 +1,9 @@
 {
     "host": "medidores.conagua.gob.mx",
-    "usuario": "prueba18",
-    "clave": "Pr3st4D0reS18#",
-    "ruta_remota": "/Prueba",
-    "hora_envio": "18:50",
+    "usuario": "",
+    "clave": "",
+    "ruta_remota": "",
+    "hora_envio": "01:00",
     "timeout": 60,
     "secure": false,
     "puerto": 21
