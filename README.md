@@ -67,7 +67,7 @@ pyinstaller TESSERACTO-UTR.spec
 Una vez que genere la carpeta <i>build/</i> junto con el programa del sistema de UTR, genere el instalador ejecutando el programa <i>instalador_TESSERACTO-UTR.exe</i>
 Cualquier modificación al instalador se realiza en el script de la raiz del proyecto NSIS <i>installer.nsi</n>, asegurese de tener instalado la extensión en VSCode de NSIS, los softwares de NSIS y HM NIS EDIT.
 Links de descarga:
-- .[NSIS: Archivos de sistema de instalación scriptable Nullsoft](https://sourceforge.net/projects/nsis/files/NSIS%203/3.12/nsis-3.12-setup.exe/download?use_mirror=cfhcable&download)
+- [NSIS: Archivos de sistema de instalación scriptable Nullsoft](https://sourceforge.net/projects/nsis/files/NSIS%203/3.12/nsis-3.12-setup.exe/download?use_mirror=cfhcable&download)
 - [HM NIS EDTI](https://sourceforge.net/projects/hmne/files/HM%20NIS%20Edit/2.0.3/nisedit2.0.3.exe/download?use_mirror=psychz&download)
 
 Si lo require, aquí podra escoger la versión de NSIS que desee instalar:
