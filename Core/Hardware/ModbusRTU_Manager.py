@@ -278,9 +278,9 @@ class MedidorAguaBase(IMedidorAgua):
             self.client = original_client
 
     def leer_registros(self) -> Dict[str, RegisterValue]:
-        """Lee registros genéricos. El post-procesamiento se delega a las clases hijas."""
+        """Lee registros en función del vector de enrutamiento asignado al perfil activo."""
         if self._consecutive_errors >= self._max_consecutive_errors:
-            self.logger.warning("Demasiados errores consecutivos, omitiendo lectura")
+            self.logger.warning("Límite de errores excedido. Interrumpiendo ciclo de lectura Modbus.")
             return {}
             
         with self._connection_lock:
@@ -291,7 +291,17 @@ class MedidorAguaBase(IMedidorAgua):
                     return {}
                     
                 resultados = {}
-                registros_a_leer = list(self.perfil["registros"].keys())
+                
+                # EXTRACTOR DE ENRUTAMIENTO DINÁMICO
+                # Filtra las lecturas en RAM basándose en las directivas de la UI
+                vector_habilitados = self.perfil.get("registros_habilitados")
+                
+                if vector_habilitados:
+                    # Intersección de conjuntos para asegurar consistencia de punteros
+                    registros_a_leer = [r for r in vector_habilitados if r in self.perfil["registros"]]
+                else:
+                    # Fallback: Lectura total si no existe vector de enrutamiento
+                    registros_a_leer = list(self.perfil["registros"].keys())
                 
                 if len(registros_a_leer) > 10:
                     registros_a_leer = registros_a_leer[:10]
@@ -302,13 +312,12 @@ class MedidorAguaBase(IMedidorAgua):
                     try:
                         resultados[reg_name] = self._leer_registro(reg_name)
                     except Exception as e:
-                        self.error_handler.log_error("007", f"Error en registro: {reg_name}", es_error_sistema=True)
+                        self.error_handler.log_error("007", f"Fallo de lectura en dirección {reg_name}", es_error_sistema=True)
                         resultados[reg_name] = None
                         self._consecutive_errors += 1
 
                 if resultados and any(v is not None for v in resultados.values()):
                     self._consecutive_errors = 0
-                    # DELEGACIÓN AL POLIMORFISMO: Las clases hijas post-procesan
                     resultados = self._postprocesar_resultados(resultados)
                 
                 return resultados

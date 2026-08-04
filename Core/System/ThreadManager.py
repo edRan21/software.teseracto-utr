@@ -1,120 +1,91 @@
-# Core/System/ThreadManager.py
+# TESERACTO-UTR/Core/System/ThreadManager.py
 
-import threading
-import time
 import logging
-from typing import Dict, List, Callable
-from PyQt5.QtCore import QObject, pyqtSignal, QTimer
-# APORTACIÓN 1: Importar ErrorHandler
-from Core.System.ErrorHandler import ErrorHandler
+from typing import Optional, Any
+from Core.Hardware.ModbusPoller import ModbusPoller
+from Core.Network.InternetManager import MonitorRed
 
-class ThreadManager(QObject):
-    """Gestiona hilos de trabajo de forma segura y evita acumulación"""
-    
-    # Señales para comunicación con GUI
-    thread_finished = pyqtSignal(str, bool)  # thread_id, success
-    thread_timeout = pyqtSignal(str)         # thread_id
-    
+class ThreadManager:
+    """
+    Gestor del Ciclo de Vida (Lifecycle Manager).
+    Orquesta el arranque y detención de los procesos industriales en segundo plano,
+    garantizando que no existan hilos huérfanos (zombies) ni bloqueos de hardware.
+    """
     def __init__(self):
-        super().__init__()
-        self._active_threads: Dict[str, threading.Thread] = {}
-        self._thread_timeouts: Dict[str, float] = {}
-        self._max_threads = 5
-        self._default_timeout = 10.0  # segundos
-        
-        # Timer para limpieza de hilos
-        self.cleanup_timer = QTimer()
-        self.cleanup_timer.timeout.connect(self._cleanup_stuck_threads)
-        self.cleanup_timer.start(5000)  # Cada 5 segundos
+        self.logger = logging.getLogger(self.__class__.__name__)
+        # Referencia al Productor Único
+        # Referencias a Procesos en Segundo Plano
+        self.modbus_poller: Optional[ModbusPoller] = None
+        self.monitor_red: Optional[MonitorRed] = None 
+        self.file_scheduler: Optional[Any] = None
 
-    # APORTACIÓN 1: Agregar error_handler opcional
-    def start_thread(self, thread_id: str, target: Callable, args: tuple = (), timeout: float = None, error_handler: ErrorHandler = None) -> bool:
-        """Inicia un hilo de forma controlada"""
+    def registrar_poller(self, poller: ModbusPoller) -> None:
+        """Registra la instancia del motor de hardware en el orquestador."""
+        self.modbus_poller = poller
+        self.logger.info("ModbusPoller registrado en el gestor de ciclo de vida.")
         
-        if len(self._active_threads) >= self._max_threads:
-            msg = f"Límite de hilos alcanzado. Rechazando: {thread_id}"
-            logging.warning(msg)
-            # APORTACIÓN 1: Notificación visual
-            if error_handler:
-                error_handler.log_error("010", msg, es_error_sistema=True)
-            return False
+    def registrar_monitor_red(self, monitor: MonitorRed) -> None:
+        self.monitor_red = monitor
+        self.logger.info("MonitorRed registrado en el gestor de ciclo de vida.")
+    
+    def registrar_scheduler(self, scheduler: Any) -> None:
+        """Registra la instancia del planificador de red en el orquestador"""
+        self.file_scheduler = scheduler
+        self.logger.info("FileScheduler registrado en el gestor de ciclo de vida.")
+        
+
+    def arrancar_hardware(self) -> None:
+        """Ordena el inicio de las lecturas industriales en segundo plano."""
+        if self.modbus_poller:
+            self.logger.info("Orquestador iniciando el gobernador de hardware...")
+            self.modbus_poller.iniciar()
+        else:
+            self.logger.error("Fallo de orquestación: ModbusPoller no está registrado.")
+    
+    def arrancar_monitor_red(self):
+        """Inicia el monitoreo de conectividad."""
+        if self.monitor_red:
+            self.logger.info("Orquestador iniciando el monitoreo de red...")
+            self.monitor_red.iniciar()
             
-        self._cleanup_completed_threads()
-        
-        thread = threading.Thread(
-            target=self._thread_wrapper,
-            # Pasamos el error_handler al wrapper
-            args=(thread_id, target, args, timeout or self._default_timeout, error_handler),
-            name=f"Worker-{thread_id}",
-            daemon=True
-        )
-        
-        self._active_threads[thread_id] = thread
-        self._thread_timeouts[thread_id] = time.time() + (timeout or self._default_timeout)
-        thread.start()
-        
-        logging.debug(f"Hilo iniciado: {thread_id}")
-        return True
-
-    # APORTACIÓN 1: El wrapper ahora acepta y usa el error_handler
-    def _thread_wrapper(self, thread_id: str, target: Callable, args: tuple, timeout: float, error_handler: ErrorHandler = None):
-        """Envuelve la ejecución del hilo con manejo de errores y timeout"""
-        start_time = time.time()
-        success = False
-        
-        try:
-            target(*args)
-            success = True
+    def arrancar_scheduler(self):
+        """Iniciar el planificador cronométrico."""
+        if self.file_scheduler:
+            self.logger.info("Orquestador iniciando el planificador de envíos...")
+            self.file_scheduler.iniciar()
             
-        except Exception as e:
-            msg = f"Colapso en proceso en segundo plano: {thread_id}"
-            logging.error(f"{msg}. Detalle: {e}")
-            # APORTACIÓN 1: Notificación visual del fallo del hilo
-            if error_handler:
-                error_handler.log_error("010", msg, es_error_sistema=True)
-            success = False
-            
-        finally:
-            self._active_threads.pop(thread_id, None)
-            self._thread_timeouts.pop(thread_id, None)
-            self.thread_finished.emit(thread_id, success)
-            execution_time = time.time() - start_time
-            logging.debug(f"Hilo {thread_id} finalizado en {execution_time:.2f}s")
+    def detener_hardware(self) -> None:
+        """Ordena la detención controlada de las lecturas y liberación del puerto."""
+        if self.modbus_poller:
+            self.logger.info("Orquestador deteniendo el gobernador de hardware...")
+            self.modbus_poller.detener()
+    
+    def manejar_desconexion_fisica(self) -> None:
+        """
+        Intervención de emergencia (Interrupt).
+        Invocado por el USBManejador cuando detecta que el usuario arrancó el cable.
+        Fuerza la liberación de los hilos de lectura para prevenir bloqueos de Windows.
+        """
+        self.logger.warning("Alerta de desconexión física recibida. Ejecutando paro de emergencia del ModbusPoller...")
+        if self.modbus_poller:
+            self.modbus_poller.detener()
 
-    def _cleanup_completed_threads(self):
-        """Limpia hilos que han terminado pero no fueron removidos"""
-        completed = []
-        for thread_id, thread in self._active_threads.items():
-            if not thread.is_alive():
-                completed.append(thread_id)
-                
-        for thread_id in completed:
-            self._active_threads.pop(thread_id, None)
-            self._thread_timeouts.pop(thread_id, None)
-
-    def _cleanup_stuck_threads(self):
-        """Termina hilos que excedieron su timeout"""
-        current_time = time.time()
-        stuck_threads = []
+    def detener_todos_los_procesos(self) -> None:
+        """
+        Secuencia de apagado (Teardown).
+        Garantiza la limpieza absoluta de la memoria RAM y recursos de red/hardware 
+        antes de que el sistema operativo destruya el proceso principal.
+        """
+        self.logger.info("Ejecutando limpieza global de procesos en segundo plano...")
         
-        for thread_id, timeout_time in self._thread_timeouts.items():
-            if current_time > timeout_time:
-                stuck_threads.append(thread_id)
-                
-        for thread_id in stuck_threads:
-            logging.warning(f"Terminando hilo bloqueado: {thread_id}")
-            thread = self._active_threads.get(thread_id)
-            if thread and thread.is_alive():
-                # En Python no podemos forzar terminación, pero podemos marcarlo
-                self._active_threads.pop(thread_id, None)
-                self._thread_timeouts.pop(thread_id, None)
-                self.thread_timeout.emit(thread_id)
+        if self.modbus_poller:
+            self.detener_hardware()
+        # Aquí se pueden agregar futuras detenciones de otros motores si el sistema escala
+        if self.monitor_red:
+            self.monitor_red.detener()
+        if self.file_scheduler:
+            self.file_scheduler.detener()
+            self.logger.info("FileScheduler detenido de forma segura por el Orquestador.")
 
-    def stop_all_threads(self):
-        """Detiene todos los hilos activos (para cierre de aplicación)"""
-        logging.info("Deteniendo todos los hilos de trabajo...")
-        self._active_threads.clear()
-        self._thread_timeouts.clear()
-
-# Instancia global
+# Instancia global (Singleton) para acceso centralizado
 thread_manager = ThreadManager()

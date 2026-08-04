@@ -1,6 +1,6 @@
 # Software.Teseracto-UTR
 
-<h1>Bienvenido al repositorio en donde se almacena el sistema de telemetría Teseracto UTR (Unidad de transmisión remota)</h1>
+<h1>Bienvenido al repositorio en donde se almacena el sistema de telemetría Tesseracto UTR (Unidad de transmisión remota)</h1>
 
 <ul>
     <li>
@@ -59,10 +59,11 @@ pyinstaller TESSERACTO-UTR.spec
 
 >[!NOTE]
 >Utiliza el siguiente comando para automatizar la tarea de compilar el software y generar un empaquetamiento limpio de cualquier cache que interfiera con los paquetes del sistema.
+>```
+>./build.bat
+>```
 >
-> ./build.bat
->
->Recomendable utilizar este comando si continuamente empaqueta el software tras cada nueva integración que realice (es un script que automatiza la tarea de empaquetar el software con el .spec para pyinstaller de forma limpia y elimina el .exe que queda en la raiz de 'build/' ).
+>Recomendable utilizar este comando si continuamente empaqueta el software tras cada nueva integración que realice (es un script que automatiza la tarea de empaquetar el software con el .spec para pyinstaller de forma limpia y elimina el .exe que queda en la raiz de 'dist/' ).
 
 Una vez que genere la carpeta <i>build/</i> junto con el programa del sistema de UTR, genere el instalador ejecutando el programa <i>instalador_TESSERACTO-UTR.exe</i>
 Cualquier modificación al instalador se realiza en el script de la raiz del proyecto NSIS <i>installer.nsi</n>, asegurese de tener instalado la extensión en VSCode de NSIS, los softwares de NSIS y HM NIS EDIT.

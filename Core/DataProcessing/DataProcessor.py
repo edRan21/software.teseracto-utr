@@ -1,41 +1,64 @@
 # TESERACTO-UTR/Core/DataProcessing/DataProcessor.py
 
-from .Interfaces import IUnitConverter
-from Core.System.ErrorHandler import ErrorHandler  # NUEVO: Importamos el notificador
 import logging
+from typing import Dict, Any
+from Core.DataProcessing.Services import UnitConverter
+from Core.System.ErrorHandler import ErrorHandler
 
-class DataProcessor:  
-    """Procesador de datos brutos que aplica conversiones de unidades según el perfil
-    del sensor.
+class DataProcessor:
     """
-    # APORTACIÓN 1: Inyectamos ErrorHandler de forma opcional
-    def __init__(self, unit_converter: IUnitConverter, error_handler: ErrorHandler = None):  
-        self.unit_converter = unit_converter  
+    Motor Matemático y de Conversión.
+    Responsabilidad: Aplicar los factores de escala de la interfaz gráfica y 
+    gestionar las alarmas físicas sin intervenir en la decodificación binaria (Modbus).
+    """
+    def __init__(self, convertidor_unidades: UnitConverter, error_handler: ErrorHandler):
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.unit_converter = convertidor_unidades
         self.error_handler = error_handler
 
-    def process(self, raw_data: dict, sensor_profile: dict) -> dict:
-        processed = {}  
-        registros = sensor_profile.get("registros", {})
-        
-        for name, value in raw_data.items():  
-            try:  
-                reg_config = registros.get(name, {})
-                if "unidad" in reg_config and "escala" in reg_config:
-                    processed[name] = value * reg_config["escala"]
-                elif "unidad_destino" in reg_config and "unidad" in reg_config:  
-                    processed[name] = self.unit_converter.convert(
-                        value, 
-                        reg_config["unidad"], 
-                        reg_config["unidad_destino"]
-                    )  
-                else:  
-                    processed[name] = value  
-            except Exception as e:  
-                # APORTACIÓN 1: Notificar visualmente el error de conversión (Código 303)
-                if self.error_handler:
-                    self.error_handler.log_error("303", f"Fallo al procesar dato '{name}'", es_error_sistema=True)
+    def process(self, datos_crudos: Dict[str, Any], perfil: Dict[str, Any]) -> Dict[str, Any]:
+        if not datos_crudos or not perfil:
+            return self._generar_diccionario_neutro()
+
+        procesados = self._generar_diccionario_neutro()
+        registros_config = perfil.get("registros", {})
+
+        try:
+            # 1. Aplicar Escalas Matemáticas configuradas en la UI
+            for reg_name, valor_crudo in datos_crudos.items():
+                if valor_crudo is None:
+                    continue
+                    
+                reg_config = registros_config.get(reg_name, {})
+                escala = reg_config.get("escala", 1.0)
                 
-                logging.error(f"Error detallado procesando {name}: {str(e)}")  
-                processed[name] = None 
-                
-        return processed
+                # Si el dato es numérico, aplicamos la escala multiplicativa
+                if isinstance(valor_crudo, (int, float)) and not isinstance(valor_crudo, bool):
+                    procesados[reg_name] = float(valor_crudo) * float(escala)
+                else:
+                    # Para diccionarios de bits (como errores_sensor) o booleanos
+                    procesados[reg_name] = valor_crudo
+
+            # 2. Delegación de Diagnóstico KER (Estado del Medidor)
+            estado_bruto = datos_crudos.get("codigo_error", 0)
+            tipo_medidor = perfil.get("tipo_medidor", "Desconocido")
+            
+            if estado_bruto is not None and isinstance(estado_bruto, int):
+                self.error_handler.procesar_estado_bruto_medidor(estado_bruto, tipo_medidor)
+
+            return procesados
+
+        except Exception as e:
+            self.error_handler.log_error("303", f"Fallo al escalar y procesar datos: {str(e)}")
+            return self._generar_diccionario_neutro()
+
+    def _generar_diccionario_neutro(self) -> Dict[str, Any]:
+        return {
+            "flujo_instantaneo": 0.0,
+            "flujo_acumulado": 0.0,
+            "velocidad_flujo": 0.0,
+            "direccion_flujo": 0,
+            "contador_energizacion": 0,
+            "codigo_error": 0,
+            "errores_sensor": {}
+        }

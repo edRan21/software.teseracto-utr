@@ -5,34 +5,37 @@ import time
 import threading
 import logging
 import json
-import smtplib
+import shutil
 from datetime import datetime
 from typing import Callable, Dict, Any, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+
 from Core.Network.IFileTransfer import IFileTransfer
 from Core.System.ErrorHandler import ErrorHandler
 from Core.System.PathManager import path_manager
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-import shutil
 
 class FileScheduler:
-    
+    """
+    Planificador de Telemetría Industrial.
+    Implementa APScheduler para sincronización cronométrica y gestión de colas FIFO 
+    para la recuperación de datos tras caídas prolongadas de red.
+    """
     def __init__(
         self,
         transfer_service: IFileTransfer,
+        email_manager: Any,
         config: Dict[str, Any],
         get_plantilla_fn: Callable[[str], Dict[str, Any]],
         error_handler: ErrorHandler
     ):
+        # Inyección de Dependencias (DIP)
         self.transfer_service = transfer_service
+        self.email_manager = email_manager 
         self.config = config
         self.get_plantilla = get_plantilla_fn
         self.error_handler = error_handler
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(self.__class__.__name__)
         
         self._scheduler: Optional[BackgroundScheduler] = None
         self._lock = threading.RLock()
@@ -41,36 +44,22 @@ class FileScheduler:
         self._last_successful_run: Optional[datetime] = None
         self._consecutive_failures = 0
         
-        self.email_config = self._cargar_config_email()
+        # Rutas dinámicas seguras para entornos empaquetados
         self.backup_dir = path_manager.get_writable_path() / "backups_envios"
-        self.backup_dir.mkdir(exist_ok=True)
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
         self._verificar_estructura_directorios()
-        
-    def _cargar_config_email(self) -> Optional[Dict[str, Any]]:
-        try:
-            config_path = path_manager.get_config_path("email_config.json")
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            return None
-        except Exception as e:
-            self.error_handler.log_error("301", "Error cargando configuración de Email", es_error_sistema=True)
-            return None
-
-    def _actualizar_config_email(self, nueva_config: Dict[str, Any]):
-        self.email_config = nueva_config
 
     def actualizar_configuracion_completa(self, ftp_config: Dict[str, Any], email_config: Optional[Dict[str, Any]] = None):
         with self._lock:
             if hasattr(self.transfer_service, 'actualizar_configuracion'):
                 self.transfer_service.actualizar_configuracion(ftp_config)
+            if email_config and hasattr(self.email_manager, 'actualizar_configuracion'):
+                self.email_manager.actualizar_configuracion(email_config)
             
             self.config["hora_envio"] = ftp_config.get("hora_envio", self.config.get("hora_envio", "23:59"))
             self.config["ruta_remota"] = ftp_config.get("ruta_remota", self.config.get("ruta_remota", "/"))
             
-            if email_config:
-                self.email_config = email_config
-            
+            # Reinicio cronométrico en caliente
             if self._is_running:
                 self.detener()
                 time.sleep(1)
@@ -81,29 +70,11 @@ class FileScheduler:
             pendientes_dir = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
             os.makedirs(pendientes_dir, exist_ok=True)
         except Exception as e:
-            self.error_handler.log_error("010", "Fallo al verificar estructura de directorios", es_error_sistema=True)
-    
-    def _crear_respaldo_seguro(self, ruta_archivo: str) -> bool:
-        try:
-            if not os.path.exists(ruta_archivo):
-                return True
-            
-            filename = os.path.basename(ruta_archivo)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_file = self.backup_dir / f"{filename}.{timestamp}.backup"
-            
-            shutil.copy2(ruta_archivo, backup_file)
-            
-            backups = list(self.backup_dir.glob("*.backup"))
-            if len(backups) > 50:
-                for old_backup in sorted(backups)[:len(backups)-50]:
-                    try: old_backup.unlink()
-                    except: pass
-            return True
-        except Exception as e:
-            self.logger.error(f"Error creando respaldo: {e}")
-            return False
-    
+            self.error_handler.log_error("010", "Fallo al inicializar topología de directorios", es_error_sistema=True)
+
+    # =========================================================================
+    # OBSERVABILIDAD PARA LA INTERFAZ GRÁFICA
+    # =========================================================================
     def obtener_estado(self) -> Dict[str, Any]:
         with self._lock:
             directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
@@ -134,10 +105,10 @@ class FileScheduler:
                         if job.id == 'envio_automatico_diario' and job.next_run_time:
                             estado["proxima_ejecucion"] = job.next_run_time.strftime("%H:%M")
                             break
-                except: pass
+                except Exception: pass
             
             return estado
-    
+
     def obtener_detalle_archivos_pendientes(self) -> List[Dict[str, Any]]:
         detalles = []
         directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
@@ -161,52 +132,40 @@ class FileScheduler:
                         "estado": "email_pendiente" if filename.endswith('.email_pending') else "pendiente",
                         "prioridad": "ALTA" if antiguedad >= 3 else "MEDIA" if antiguedad >= 1 else "BAJA"
                     })
-                except: pass
+                except Exception: pass
         
+        # Ordenamiento crítico para la UI
         return sorted(detalles, key=lambda x: x["antiguedad_dias"], reverse=True)
-    
-    def _enviar_email_archivo(self, ruta_archivo: str) -> bool:
-        if not self.email_config or 'smtp_server' not in self.email_config:
-            return False 
-        
-        filename = os.path.basename(ruta_archivo)
-        for intento in range(3):
-            try:
-                with open(ruta_archivo, 'r', encoding='utf-8') as f:
-                    contenido = f.read()
-                
-                msg = MIMEMultipart()
-                msg['From'] = self.email_config['from']
-                msg['To'] = ', '.join(self.email_config['to'])
-                msg['Subject'] = self.email_config['subject']
-                msg['Date'] = datetime.now().strftime("%a, %d %b %Y %H:%M:%S +0000")
-                
-                body = f"Archivo adjunto: {filename}\nFecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nSistema: Tesseract UTR\n"
-                msg.attach(MIMEText(body, 'plain'))
-                
-                with open(ruta_archivo, 'rb') as f:
-                    part = MIMEBase('application', 'octet-stream')
-                    part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-                    msg.attach(part)
-                
-                with smtplib.SMTP(self.email_config['smtp_server'], self.email_config['smtp_port'], timeout=30) as server:
-                    server.starttls()
-                    server.login(self.email_config['username'], self.email_config['password'])
-                    server.send_message(msg)
+
+    # =========================================================================
+    # LÓGICA DE AUDITORÍA Y RESPALDO
+    # =========================================================================
+    def _crear_respaldo_seguro(self, ruta_archivo: str) -> bool:
+        try:
+            if not os.path.exists(ruta_archivo):
                 return True
-                
-            except Exception as e:
-                self.logger.error(f"Error email: {e}")
-                time.sleep(2)
-        return False
-    
+            
+            filename = os.path.basename(ruta_archivo)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = self.backup_dir / f"{filename}.{timestamp}.backup"
+            
+            shutil.copy2(ruta_archivo, backup_file)
+            
+            # Rotación de logs inmutable (Mantiene los últimos 50)
+            backups = list(self.backup_dir.glob("*.backup"))
+            if len(backups) > 50:
+                for old_backup in sorted(backups)[:len(backups)-50]:
+                    try: old_backup.unlink()
+                    except Exception: pass
+            return True
+        except Exception as e:
+            self.logger.error(f"Error I/O creando respaldo: {e}")
+            return False
+
     def _guardar_log_envio_detallado(self, inicio: datetime, resultados: list, modo: str):
-        """Genera un reporte JSON detallado de la sesión de envío."""
         try:
             log_dir = path_manager.get_writable_path() / "logs_envios"
-            log_dir.mkdir(exist_ok=True)
+            log_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = inicio.strftime('%Y%m%d_%H%M%S')
             log_file = log_dir / f"envio_{timestamp}.json"
@@ -214,9 +173,9 @@ class FileScheduler:
             log_data = {
                 "sesion_inicio": inicio.isoformat(),
                 "modo": modo,
-                "servidores": {
-                    "ftp_host": self.config.get("host", "Desconocido"),
-                    "email_activo": bool(self.email_config)
+                "servidores_activos": {
+                    "protocolo_primario": True,
+                    "email_activo": self.email_manager is not None
                 },
                 "detalle_archivos": resultados,
                 "resumen": {
@@ -230,14 +189,14 @@ class FileScheduler:
             with open(log_file, 'w', encoding='utf-8') as f:
                 json.dump(log_data, f, indent=2, ensure_ascii=False)
                 
-            self.logger.info(f"📝 Log de envío generado: {log_file}")
-            
         except Exception as e:
-            self.logger.error(f"Fallo crítico al intentar escribir el log: {e}")
+            self.logger.error(f"Excepción de auditoría JSON: {e}")
 
+    # =========================================================================
+    # MOTOR DE TRANSACCIÓN AISLADA
+    # =========================================================================
     def _procesar_archivo_individual(self, ruta_archivo: str) -> Dict[str, Any]:
-        """Procesa FTP y Email de forma 100% independiente y registra en errores.log"""
-        
+        """Procesa protocolos de forma agnóstica con aislamiento estricto de excepciones."""
         filename = os.path.basename(ruta_archivo)
         resultado = {
             "ftp_ok": False,
@@ -254,95 +213,90 @@ class FileScheduler:
 
             es_email_pendiente = filename.endswith('.email_pending')
             
-            # ==========================================
-            # 1. BLOQUE FTP (Aislado)
-            # ==========================================
-            if not es_email_pendiente:
-                ftp_ok, ftp_msg = self.transfer_service.enviar_archivo(ruta_archivo, ruta_remota)
-                resultado["ftp_ok"] = ftp_ok
-                resultado["ftp_msg"] = ftp_msg
-                
-                if not ftp_ok:
-                    self.logger.error(f"FTP Fallido para {filename}: {ftp_msg}")
-                    # ✅ REGISTRO FÍSICO: Se envía al errores.log
-                    self.error_handler.log_error("FTP-550", f"Fallo FTP en {filename}: {ftp_msg}", es_error_sistema=True)
-            else:
-                resultado["ftp_ok"] = True
-                resultado["ftp_msg"] = "Ya enviado previamente (Omitido)"
+            # PROTOCOLO 1: Interfaz Genérica (FTP) - Aislado
+            try:
+                if not es_email_pendiente:
+                    ftp_ok, ftp_msg = self.transfer_service.enviar_archivo(ruta_archivo, ruta_remota)
+                    resultado["ftp_ok"] = ftp_ok
+                    resultado["ftp_msg"] = ftp_msg
+                    
+                    if not ftp_ok:
+                        self.error_handler.log_error("FTP-550", f"Fallo de transmisión en {filename}: {ftp_msg}", es_error_sistema=True)
+                else:
+                    resultado["ftp_ok"] = True
+                    resultado["ftp_msg"] = "Transmisión principal previa exitosa (Omitido)"
+            except Exception as e_ftp:
+                resultado["ftp_ok"] = False
+                resultado["ftp_msg"] = f"Excepción en capa FTP: {e_ftp}"
+                self.error_handler.log_error("FTP-550", resultado["ftp_msg"], es_error_sistema=True)
 
-            # ==========================================
-            # 2. BLOQUE EMAIL (Aislado e Independiente)
-            # ==========================================
-            # ✅ INDEPENDENCIA: Se ejecuta sin importar si el FTP falló o tuvo éxito
-            email_ok = self._enviar_email_archivo(ruta_archivo)
-            resultado["email_ok"] = email_ok
-            
-            if not email_ok:
-                self.error_handler.log_error("EMAIL-FAIL", f"Fallo Email en {filename}", es_error_sistema=True)
+            # PROTOCOLO 2: Delegación estricta de Email - Aislado
+            try:
+                if hasattr(self.email_manager, 'enviar_archivo'):
+                    # CORRECCIÓN: Se inyecta el segundo parámetro requerido (nombre_adjunto)
+                    email_ok = self.email_manager.enviar_archivo(ruta_archivo, filename)
+                else:
+                    email_ok = False
+                    
+                resultado["email_ok"] = email_ok
+                if not email_ok:
+                    self.error_handler.log_error("EMAIL-FAIL", f"Fallo Email en {filename}", es_error_sistema=True)
+            except Exception as e_email:
+                resultado["email_ok"] = False
+                self.error_handler.log_error("EMAIL-FAIL", f"Excepción crítica en Email: {e_email}", es_error_sistema=True)
 
-            # ==========================================
-            # 3. EVALUACIÓN Y PERSISTENCIA
-            # ==========================================
+            # EVALUACIÓN DE ESTADO Y ROTACIÓN DE ARCHIVOS
             if resultado["ftp_ok"] and resultado["email_ok"]:
                 resultado["exito_completo"] = True
                 if self._crear_respaldo_seguro(ruta_archivo):
                     try: os.remove(ruta_archivo)
-                    except: pass
+                    except Exception: pass
             elif resultado["ftp_ok"] and not resultado["email_ok"]:
-                # FTP exitoso, Email fallido. Cambiamos extensión para no repetir FTP
                 if not es_email_pendiente:
                     nueva_ruta = f"{ruta_archivo}.email_pending"
                     try: os.rename(ruta_archivo, nueva_ruta)
-                    except: pass
-            
-            # Nota: Si FTP falla, simplemente no lo renombramos ni lo borramos. 
-            # El archivo se queda como .txt para el siguiente intento.
+                    except Exception: pass
             
             return resultado
 
         except Exception as e:
-            msg = f"Error crítico procesando {filename}: {str(e)}"
-            self.logger.error(msg)
+            # Captura únicamente errores estructurales (ej. fallos leyendo el sistema de archivos)
+            msg = f"Error estructural crítico procesando {filename}: {str(e)}"
             self.error_handler.log_error("SYS-FAIL", msg, es_error_sistema=True)
-            resultado["ftp_msg"] = msg
+            if not resultado["ftp_ok"] and resultado["ftp_msg"] == "No ejecutado":
+                resultado["ftp_msg"] = msg
             return resultado
-    
+
+    # =========================================================================
+    # ORQUESTADOR DE COLAS FIFO (RESILIENCIA INDUSTRIAL)
+    # =========================================================================
     def _ejecutar_envio_automatico(self, modo="AUTOMÁTICO"):
-        """Procesa estrictamente en FILA INDIA SIN CONGELAR EL SISTEMA. Respetando la hora programada.
-            El macro-reintento evaluará el tiempo antes de enviar.
-        """
-        # 1. BLOQUEO MILIMÉTRICO (Solo para checar si ya estamos ocupados)
         with self._lock:
             if self._is_processing:
                 return
             self._is_processing = True
 
-        # 2. PROCESO DE RED (Totalmente libre de candados)
         inicio_sesion = datetime.now()
         resultados_sesion = []
         
         try:
-            import os
             directorio = self.config.get("directorio_pendientes", str(path_manager.get_pendientes_usb_path()))
-            
-            # Obtenemos la hora programada de la configuración (por defecto 23:59)
             hora_envio_str = self.config.get("hora_envio", "23:59")
+            
             try:
-                # Convertimos el texto "HH:MM" a un objeto de tiempo para cálculos matemáticos
                 hora_envio_obj = datetime.strptime(hora_envio_str, "%H:%M").time()
             except ValueError:
-                self.logger.warning(f"Formato de hora inválido: {hora_envio_str}. Usando 23:59.")
                 hora_envio_obj = datetime.strptime("23:59", "%H:%M").time()
                  
             if not os.path.exists(directorio):
                 return
             
             archivos = [os.path.join(directorio, f) for f in os.listdir(directorio) if f.endswith('.txt') or f.endswith('.email_pending')]
-            
             if not archivos:
                 self._last_successful_run = datetime.now()
                 return
             
+            # Ordenamiento determinista FIFO (First-In, First-Out)
             archivos.sort(key=os.path.getmtime)
             
             exitosos = 0
@@ -357,34 +311,27 @@ class FileScheduler:
                     fecha_mtime = ahora
                     fecha_archivo = ahora.isoformat()
                 
-                # =========================================================
-                # 🧠 LÓGICA DE SINCRONIZACIÓN DE TIEMPO
-                # =========================================================
+                # EVALUACIÓN DE REZAGO (BACKLOG PROCESSING)
                 debe_enviarse = False
                 
                 if modo == "MANUAL":
-                    # Si el usuario presiona el botón "Envío Inmediato", ignoramos la hora.
                     debe_enviarse = True
                 else:
                     if fecha_mtime.date() < ahora.date():
-                        # Si el archivo es de ayer o antes (rezago real), se envía de inmediato.
+                        # Si es un archivo de días anteriores (Backlog), se transmite inmediatamente
                         debe_enviarse = True
                     elif fecha_mtime.date() == ahora.date():
-                        # Si el archivo es de hoy, verificamos si ya llegó la hora oficial.
+                        # Si es del día actual, evalúa la ventana de tiempo
                         hora_envio_hoy = datetime.combine(ahora.date(), hora_envio_obj)
                         if ahora >= hora_envio_hoy:
                             debe_enviarse = True
                         else:
-                            # El macro-reintento despertó antes de la hora oficial.
-                            # Se ignora el archivo para que espere su turno a la hora en que se programe el envió.
-                            self.logger.debug(f"Archivo {nombre} en espera. Aún no son las {hora_envio_str}.")
                             debe_enviarse = False
                     else:
                         debe_enviarse = False
-                # Si la lógica decide que aún no es tiempo, saltamos al siguiente archivo
+                        
                 if not debe_enviarse:
                     continue
-                # ========================================================
                 
                 res = self._procesar_archivo_individual(ruta_archivo)
                 
@@ -405,69 +352,57 @@ class FileScheduler:
             
             if exitosos > 0:
                 self._last_successful_run = datetime.now()
+                self._consecutive_failures = 0
+            elif resultados_sesion:
+                self._consecutive_failures += 1
 
         except Exception as e:
-            self.logger.error(f"Error en el ciclo de ejecución: {str(e)}")
+            self.logger.error(f"Falla de concurrencia en planificador: {str(e)}")
         finally:
-            # 3. LIBERACIÓN DEL ESTADO (Para que el siguiente ciclo pueda entrar)
             with self._lock:
                 self._is_processing = False
-    
-    def actualizar_hora_envio(self, nueva_hora: str):
-        with self._lock:
-            try:
-                hora, minuto = map(int, nueva_hora.split(':'))
-                if not (0 <= hora <= 23 and 0 <= minuto <= 59):
-                    raise ValueError("Hora inválida")
-                
-                self.config["hora_envio"] = nueva_hora
-                
-                if self._is_running and self._scheduler:
-                    self.detener()
-                    time.sleep(1)
-                    self.iniciar()
-                return True
-            except Exception as e:
-                return False
-    
+
+    # =========================================================================
+    # GESTIÓN DE CICLO DE VIDA (APScheduler)
+    # =========================================================================
     def iniciar(self):
-        """Inicia los cronómetros correctos de envío y reintento."""
         with self._lock:
             if self._is_running:
                 return
             try:
                 if self._scheduler:
                     try: self._scheduler.shutdown(wait=False)
-                    except: pass
+                    except Exception: pass
                 
-                self._scheduler = BackgroundScheduler(daemon=True, timezone='America/Mexico_City')
+                # CORRECCIÓN: Adopción del reloj nativo del sistema operativo (Sin dependencias externas)
+                self._scheduler = BackgroundScheduler(daemon=True)
                 
                 hora_str = self.config.get("hora_envio", "23:59")
                 hora, minuto = map(int, hora_str.split(':'))
                 
-                # TAREA 1: El reloj maestro que la UI lee
+                # TAREA 1: Cronómetro oficial
                 self._scheduler.add_job(
                     func=self._ejecutar_envio_automatico,
                     trigger=CronTrigger(hour=hora, minute=minuto),
                     id='envio_automatico_diario',
-                    name=f'Envío programado {hora_str}',
+                    name=f'Transmisión Cron {hora_str}',
                     replace_existing=True
                 )
                 
-                # TAREA 2: El martillo de reintentos
+                # TAREA 2: Recuperación de red (Reintento de backlog)
                 self._scheduler.add_job(
                     func=self._ejecutar_envio_automatico,
                     trigger='interval',
                     minutes=15,
                     id='persistencia_industrial',
-                    name='Reintento continuo FTP/Email',
+                    name='Recuperación de Red',
                     replace_existing=True
                 )
                 
                 self._scheduler.start()
                 self._is_running = True
             except Exception as e:
-                self.error_handler.log_error("010", f"Error de inicio: {e}")
+                self.error_handler.log_error("010", f"Error iniciando APScheduler: {e}")
                 self._is_running = False
     
     def detener(self):
@@ -476,10 +411,9 @@ class FileScheduler:
                 if self._scheduler and self._is_running:
                     self._scheduler.shutdown(wait=True)
                     self._is_running = False
-            except: pass
+            except Exception: pass
     
     def forzar_envio_inmediato(self) -> Dict[str, Any]:
-        """Cálculo real de archivos transmitidos en envío manual."""
         resultado = {"exitosos": 0, "fallidos": 0, "total": 0, "tiempo_segundos": 0, "mensaje": ""}
         try:
             start = datetime.now()
@@ -499,7 +433,7 @@ class FileScheduler:
             resultado["exitosos"] = exitosos_reales
             resultado["fallidos"] = pendientes_despues
             resultado["tiempo_segundos"] = (datetime.now() - start).total_seconds()
-            resultado["mensaje"] = "Proceso manual finalizado."
+            resultado["mensaje"] = "Transmisión manual completada."
             
         except Exception as e:
             resultado["mensaje"] = f"Error crítico: {str(e)}"

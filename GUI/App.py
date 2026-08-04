@@ -1,175 +1,143 @@
 # TESERACTO-UTR/GUI/App.py
-# VERSIÓN CORREGIDA - SIN QTextCursor problemático y CIERRE SEGURO
 
 import sys
-import os
 import logging
 import ctypes
+import os
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import QMetaType, QTimer
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QIcon
 
-# Establecer AppUserModelID para el icono en la barra de tareas
-if sys.platform == 'win32':
-    try:
-        app_id = 'TesseractLabs.TESSERACTO-UTR'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
-    except:
-        pass
-
+# Añadir el directorio raíz al path para importaciones absolutas
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from GUI.Windows.LoginWindow import LoginWindow
+from GUI.Windows.MainWindow import MainWindow
+
 from Core.System.ConfigManager import ConfigManager
 from Core.System.ErrorHandler import ErrorHandler
 from Core.System.StateManager import StateManager
 from Core.System.PathManager import path_manager
-# 1. Agregar esta importación en la parte superior de App.py
 from Core.Hardware.USBManejador import USBManejador
+from Core.Network.FTPManager import FTPManager
+from Core.Network.EmailManager import EmailManager
+from Core.System.FileScheduler import FileScheduler
+from Core.Network.InternetManager import MonitorRed
+
+# Orquestador Central
+from Core.System.ThreadManager import thread_manager 
 
 class TesseractApp(QApplication):
     def __init__(self, argv):
         super().__init__(argv)
-        self.event_processor = QTimer()
-        self.event_processor.timeout.connect(lambda: self.processEvents())
-        self.event_processor.start(100)  
+        self._configurar_entorno_windows()
         
-        self.error_handler = ErrorHandler()
-        self.config_manager = ConfigManager()
-        
+        # 1. INICIALIZACIÓN DE SERVICIOS BASE (Capa de Sistema)
         path_manager.ensure_directories_exist()
+        self.error_handler = ErrorHandler()
         
-        # APORTACIÓN: Encender el vigilante de la USB a nivel global
+        self.monitor_red = MonitorRed(self.error_handler)
+        thread_manager.registrar_monitor_red(self.monitor_red)
+        thread_manager.arrancar_monitor_red()
+        
+        # Limpieza de estados
+        StateManager.reiniciar_estados()
+        
+        # 2. INICIALIZACIÓN DE SERVICIOS PERIFÉRICOS Y DE RED
         self.usb_manejador = USBManejador(self.error_handler)
         self.usb_manejador.inicializar_monitoreo()
         
-        self.init_state_manager()
-        self.init_usb_storage()
-        self.init_scheduler()
+        self._preparar_scheduler()
         
+        # 3. CARGA DE CONFIGURACIÓN CRÍTICA
         try:
             self.sensor_profiles = ConfigManager.obtener_perfiles_sensores()
         except Exception as e:
-            self.error_handler.log_error("301", f"Error cargando perfiles de sensores al inicio: {e}", es_error_sistema=True)
+            self.error_handler.activar_ker_sistema("301", f"Error crítico al cargar perfiles: {e}")
             sys.exit(1)
         
+        # 4. LANZAMIENTO DE INTERFAZ GRÁFICA (Punto de entrada visual)
         self.login_window = LoginWindow(self.error_handler)
-        self.login_window.login_success.connect(self.on_login_success)
+        self.login_window.login_success.connect(self.al_iniciar_sesion)
         self.login_window.window_closed.connect(self.quit)
         self.login_window.show()
 
-    # 3. método quit (para detener la USB al cerrar)
-    def quit(self):
-        """Cierra la aplicación completamente de forma segura"""
-        logging.info("Iniciando secuencia de apagado seguro...")
-        try:
-            if hasattr(self, 'file_scheduler') and self.file_scheduler:
-                self.file_scheduler.detener()
-            
-            # APORTACIÓN: Apagar el vigilante USB
-            if hasattr(self, 'usb_manejador') and self.usb_manejador:
-                self.usb_manejador.detener_monitoreo()
-                
-            from Core.System.ThreadManager import thread_manager
-            thread_manager.stop_all_threads()
-        except Exception as e:
-            logging.error(f"Error durante el apagado de hilos: {e}")
-        sys.exit(0)
-    
-    def init_state_manager(self):
-        StateManager.reset_all()
-        logging.info("StateManager inicializado")
-    
-    def init_usb_storage(self):
-        try:
-            usb_path = path_manager.get_storage_path()
-            usb_path.mkdir(exist_ok=True)
-        except Exception as e:
-            # APORTACIÓN 1: Uso de código KER oficial "010"
-            self.error_handler.log_error("010", f"Error inicializando almacenamiento local: {e}", es_error_sistema=True)
+    def _configurar_entorno_windows(self):
+        """Asegura el refresco de UI y el ícono en la barra de tareas de Windows."""
+        self.event_processor = QTimer()
+        self.event_processor.timeout.connect(self.processEvents)
+        self.event_processor.start(100)
+        
+        if sys.platform == 'win32':
+            try:
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('TesseractLabs.TESSERACTO-UTR')
+            except: 
+                pass
 
-    def init_scheduler(self):
-        from Core.Network.FTPManager import FTPManager
-        from Core.System.FileScheduler import FileScheduler
-        from Core.System.ConfigManager import ConfigManager  
+    def _preparar_scheduler(self):
+        """Instancia el planificador de envíos y lo delega al Orquestador."""
+        config_transferencias = ConfigManager.cargar_config_ftp()
         
-        ftp_config = ConfigManager.cargar_config_ftp()
-        email_config = ConfigManager.cargar_config_email()  
-        
-        if not ftp_config:
-            ftp_config = {
-                "host": "", "usuario": "", "clave": "",
-                "ruta_remota": "/", "hora_envio": "23:59",
-                "timeout": 60, "secure": False, "puerto": 21
-            }
-        
-        ftp_manager = FTPManager(ftp_config, self.error_handler)
-        pendientes_dir = str(path_manager.get_pendientes_usb_path())
+        ftp_manager = FTPManager(config_transferencias, self.error_handler)
+        email_manager = EmailManager(config_transferencias, self.error_handler)
         
         sched_config = {
-            "hora_envio": ftp_config.get("hora_envio", "23:59"),
-            "directorio_pendientes": pendientes_dir,
-            "ruta_remota": ftp_config.get("ruta_remota", "/"),
-            "retencion_dias": 180,
-            "enabled": True
+            "hora_envio": config_transferencias.get("hora_envio", "23:59"),
+            "directorio_pendientes": str(path_manager.get_pendientes_usb_path()),
+            "ruta_remota": config_transferencias.get("ruta_remota", "/"),
+            "enabled": config_transferencias.get("enabled", True),
+            "usar_ftp": config_transferencias.get("usar_ftp", True),
+            "usar_email": config_transferencias.get("usar_email", False),
+            "usar_api": config_transferencias.get("usar_api", False)
         }
         
-        def get_plantilla(nombre_archivo):
-            return {"nombre_remoto": nombre_archivo}
-        
+        # Construcción del objeto inyectando el ErrorHandler
         self.file_scheduler = FileScheduler(
             transfer_service=ftp_manager,
+            email_manager=email_manager,
             config=sched_config,
-            get_plantilla_fn=get_plantilla,
+            get_plantilla_fn=lambda x: {}, # Función stub para resolver el contrato
             error_handler=self.error_handler
         )
         
-        if hasattr(self.file_scheduler, 'email_config'):
-            self.file_scheduler.email_config = email_config
+        # INVERSIÓN DE CONTROL: Delegación absoluta al Orquestador
+        thread_manager.registrar_scheduler(self.file_scheduler)
         
-        if sched_config.get("enabled", True):
-            try:
-                self.file_scheduler.iniciar()
-                logging.info("✅ Scheduler iniciado con configuración FTP/Email")
-            except Exception as e:
-                # APORTACIÓN 1: Uso de código KER oficial "010"
-                self.error_handler.log_error("010", f"Fallo crítico al arrancar envíos automáticos: {e}", es_error_sistema=True)
+        if sched_config["enabled"]:
+            thread_manager.arrancar_scheduler()
 
-    # 4. Reemplaza el método on_login_success (para pasar el manejador a la MainWindow)
-    def on_login_success(self, user):
-        from GUI.Windows.MainWindow import MainWindow
+    def al_iniciar_sesion(self, user):
+        """Transición controlada del Login a la Ventana Principal."""
         self.main_window = MainWindow(
             user=user,
             error_handler=self.error_handler,
             sensor_profiles=self.sensor_profiles,
             file_scheduler=self.file_scheduler,
-            usb_manejador=self.usb_manejador  # <--- APORTACIÓN: Pasamos el manejador
+            usb_manejador=self.usb_manejador
         )
-        self.start_system_services()
         
-        if not StateManager.is_system_ready():
+        if not StateManager.sistema_esta_listo():
             QMessageBox.information(
                 self.main_window,
                 "Configuraciones Pendientes",
-                "Algunas configuraciones (FTP/Email) están incompletas. "
-                "El monitoreo está activo pero algunas funciones pueden no estar disponibles."
+                "El monitoreo está activo pero algunas funciones (FTP/Email) pueden requerir configuración."
             )
         
         self.main_window.showMaximized()
         self.login_window.close()
-    
-    def start_system_services(self):
-        try:
-            if self.file_scheduler.config.get("enabled", True):
-                if not (hasattr(self.file_scheduler, '_scheduler') 
-                        and self.file_scheduler._scheduler 
-                        and self.file_scheduler._scheduler.running):
-                    self.file_scheduler.iniciar()
-                logging.info("FileScheduler verificado e iniciado")
-        except Exception as e:
-            # APORTACIÓN 1: Uso de código KER oficial "010"
-            self.error_handler.log_error("010", f"Error arrancando servicios secundarios: {e}", es_error_sistema=True)
+
+    def quit(self):
+        """Apagado determinista (Graceful Shutdown) delegado exclusivamente al Orquestador."""
+        logging.info("Iniciando apagado seguro del sistema...")
+        
+        if hasattr(self, 'usb_manejador'):
+            self.usb_manejador.detener_monitoreo()
+            
+        # El Orquestador central destruye todos los hilos (Modbus, Red, Scheduler) secuencialmente
+        thread_manager.detener_todos_los_procesos() 
+        
+        super().quit()
 
 if __name__ == "__main__":
     app = TesseractApp(sys.argv)

@@ -183,15 +183,19 @@ class ErrorConsoleWindow(QWidget):
                 
                 message = rest[level_end+1:].strip()
                 
+                # Reemplazar este bloque:
                 code = ""
                 ker_pos = message.find("KER-")
                 if ker_pos != -1:
-                    code_end = message.find(":", ker_pos)
-                    if code_end != -1: code = message[ker_pos+4:code_end].strip()
+                    # Cortamos a partir de los números (después de "KER-")
+                    resto = message[ker_pos+4:]
+                    
+                    # El código KER estricto (ej: "007" o "401") siempre termina en el primer espacio
+                    space_pos = resto.find(" ")
+                    if space_pos != -1:
+                        code = resto[:space_pos].strip()
                     else:
-                        space_pos = message.find(" ", ker_pos)
-                        if space_pos != -1: code = message[ker_pos+4:space_pos].strip()
-                        else: code = message[ker_pos+4:].strip()
+                        code = resto.strip()
                 
                 origin = "Sistema"
                 if "Modbus" in message: origin = "Modbus"

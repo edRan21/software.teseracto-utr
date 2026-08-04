@@ -186,7 +186,7 @@ class SettingsWindow(QWidget):
             
             ConfigManager.guardar_config_general(config)
             self.config_updated.emit()
-            StateManager.set_ready("settings")
+            StateManager.marcar_completado("settings")
             QMessageBox.information(self, "Éxito", "Configuración guardada correctamente")
             self.close()
             
