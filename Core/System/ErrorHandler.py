@@ -1,19 +1,23 @@
 # TESERACTO-UTR/Core/System/ErrorHandler.py
 
 import logging
-from logging.handlers import RotatingFileHandler  # NUEVO: Para autolimpieza del archivo
+from logging.handlers import RotatingFileHandler
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from Core.System.PathManager import path_manager
 
 class ErrorHandler:
+    """
+    Cerebro de Diagnóstico de TESSERACTO-UTR.
+    Fusiona la auto-resolución de estados (FSM) con la persistencia visual (Niveles) y memoria RAM.
+    """
     KER_ERRORS = {
-        # ========== ERRORES DEL SISTEMA (SOFTWARE) ==========
+        # ========== ERRORES DEL SISTEMA (SOFTWARE/RED/HARDWARE LOCAL) ==========
         "001": "Falta conexión a internet",
         "002": "Fallo en conexión FTP", 
-        "005": "Error en puerto COM",
-        "007": "Error de comunicación con medidor",
+        "005": "Error en puerto COM local",
+        "007": "Error de comunicación con medidor (Cable/Timeout)",
         "010": "Fallo general del sistema",
         "011": "Error en envío de SMS",
         
@@ -42,233 +46,232 @@ class ErrorHandler:
         "127": "ISOMAG - Desbordamiento de flujo",
         "128": "ISOMAG - Error desconocido del medidor",
         
-        # ========== ERRORES DE LA APLICACIÓN (SISTEMA) ==========
+        # ========== ERRORES DE LA APLICACIÓN (LÓGICA) ==========
         "301": "Error de configuración",
         "302": "Error de unidad de medida",
         "303": "Error de conversión de unidades",
         "304": "Error de formato de reporte",
         "305": "Error de archivo de reporte",
-        
-        # NUEVOS CÓDIGOS FTP MEJORADOS (SISTEMA)
-        "FTP-DNS": "Error de resolución DNS en servidor FTP",
-        "FTP-PORT": "Puerto FTP inaccesible", 
-        "FTP-CONNECT": "Error de conectividad al servidor FTP",
-        "FTP-CONNECTION": "Conexión FTP fallida",
-        "FTP-UNEXPECTED": "Error inesperado en conexión FTP",
-        "FTP-DIRECTORY": "Error creando directorios FTP",
-        "FTP-FORMAT": "Error validando formato de archivo",
-        "FTP-FORMAT-INVALID": "Formato de archivo inválido",
-        "FTP-PERMISSION": "Error de permisos FTP",
-        "FTP-UPLOAD": "Error subiendo archivo FTP",
-        "FTP-VERIFY": "Error verificando conexión FTP",
-        "FTP-TEST": "Error en prueba de conexión FTP",
-        
-        # CÓDIGOS DE CONFIGURACIÓN (SISTEMA)
-        "CONFIG-LOAD": "Error cargando configuración",
-        "CONFIG-SAVE": "Error guardando configuración", 
-        "CONFIG-SYNC": "Error sincronizando configuración",
-        
-        # CÓDIGOS EMAIL (SISTEMA)
-        "EMAIL-TEST": "Error en prueba de email",
     }
 
     def __init__(self, notificadores: List[object] = None):
         self.notificadores = notificadores or []
-        self.logger = self._configurar_logger()
+        self.logger = self._configurar_logger_fisico()
         
-        # APORTACIÓN: Filtro Anti-Spam Inteligente
-        self._spam_filter = {}  # Formato: {mensaje: {'last_time': float, 'count': int}}
-        self.SPAM_WINDOW = 60.0 # Segundos de espera antes de repetir un error en el log visual
+        # MAPAS DE ALARMAS ACTIVAS (Para Auto-resolución y Reportes)
+        self._ker_sistema_activos: Dict[str, float] = {}
+        self._ker_medidor_activos: Dict[str, float] = {}
         
-        # CÓDIGOS KER SEPARADOS: sistema vs medidor
+        # MEMORIA RAM HISTÓRICA (Para interfaz visual y resúmenes)
         self.ultimo_error_sistema = "000"
         self.ultimo_error_medidor = "000"
-        
         self.historial_errores_sistema = []
         self.historial_errores_medidor = []
         self.errores_comunicacion = {
             'port_a': {'crc': 0, 'parity': 0, 'framing': 0, 'overrun': 0, 'break': 0},
             'port_b': {'crc': 0, 'parity': 0, 'framing': 0, 'overrun': 0, 'break': 0}
         }
+        
+        # Filtro Anti-Spam Inteligente
+        self._spam_filter = {} 
+        self.SPAM_WINDOW = 60.0 
 
-    def _configurar_logger(self):
-        logger = logging.getLogger("TelemetríaApp")
-        logger.setLevel(logging.DEBUG)
+    def _configurar_logger_fisico(self):
+        """Mantiene el registro en disco duro compatible con ErrorConsoleWindow."""
+        logger = logging.getLogger("Telemetria_KER")
+        logger.setLevel(logging.DEBUG) 
         
         if logger.handlers:
             return logger
             
         formatter = logging.Formatter(
-            '[%(asctime)s] %(levelname)s: %(message)s',
+            '[%(asctime)s] %(levelname)s: %(message)s', 
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-
-        # APORTACIÓN: RotatingFileHandler limita el archivo a 5MB y guarda hasta 2 respaldos viejos
+        
         log_path = path_manager.get_db_path("errores.log")
         file_handler = RotatingFileHandler(
-            log_path, 
-            mode='a', 
-            maxBytes=5*1024*1024, # 5 MB
-            backupCount=2,        # Mantiene errores.log.1 y errores.log.2
-            encoding='utf-8'
+            log_path, mode='a', maxBytes=5*1024*1024, backupCount=2, encoding='utf-8'
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.WARNING)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-
+        
         return logger
 
-    def log_error(self, codigo: str, contexto: str = "", es_error_sistema: bool = True):
+    # =========================================================================
+    # LÓGICA DE SISTEMA (Internet, FTP, Puertos COM)
+    # =========================================================================
+    def activar_ker_sistema(self, codigo: str, contexto: str = ""):
+        """Enciende una alarma de sistema y la inyecta en la RAM."""
         if codigo not in self.KER_ERRORS:
-            if es_error_sistema:
-                codigo = "010"
-            else:
-                if "ISOMAG" in contexto or any(str(x) in codigo for x in range(120, 129)):
-                    codigo = "128"
-                else:
-                    codigo = "112"
+            codigo = "010"
             
-        mensaje_base = f"KER-{codigo}: {self.KER_ERRORS.get(codigo, 'Error desconocido')} | {contexto}"
+        self._ker_sistema_activos[codigo] = time.time()
+        self.ultimo_error_sistema = codigo
+        
+        self._agregar_historial(codigo, contexto, "sistema")
+        self._escribir_log_fisico(logging.ERROR, codigo, contexto)
+
+    def resolver_ker_sistema(self, codigo: str):
+        """Apaga una alarma de sistema con nivel INFO (Color Azul)."""
+        if codigo in self._ker_sistema_activos:
+            del self._ker_sistema_activos[codigo]
+            
+            if not self._ker_sistema_activos:
+                self.ultimo_error_sistema = "000"
+                
+            self._escribir_log_fisico(logging.INFO, codigo, "Resuelto automáticamente", resuelto=True)
+
+    def reset_ker_normal(self):
+        """Reinicio forzado invocado desde MainWindow."""
+        self.ultimo_error_sistema = "000"
+        self._ker_sistema_activos.clear()
+
+    # =========================================================================
+    # LÓGICA DE MEDIDORES (Modbus, Badger, ISOMAG)
+    # =========================================================================
+    def activar_ker_medidor(self, codigo: str, contexto: str = ""):
+        if codigo not in self.KER_ERRORS:
+            codigo = "112" if "Badger" in contexto else "128"
+            
+        self._ker_medidor_activos[codigo] = time.time()
+        self.ultimo_error_medidor = codigo
+        
+        self._agregar_historial(codigo, contexto, "medidor")
+        self._escribir_log_fisico(logging.ERROR, codigo, contexto)
+
+    def resolver_todos_ker_medidor(self):
+        if self._ker_medidor_activos:
+            self._ker_medidor_activos.clear()
+            self.ultimo_error_medidor = "000"
+            self._escribir_log_fisico(logging.INFO, "000", "Lecturas del medidor normalizadas", resuelto=True)
+
+    def procesar_estado_bruto_medidor(self, meter_status: int, tipo_medidor: str):
+        if meter_status == 0:
+            self.resolver_todos_ker_medidor()
+            return
+            
+        errores_detectados = []
+        
+        if tipo_medidor == "Badger M2000":
+            if meter_status & 0x01: errores_detectados.append("101")
+            if meter_status & 0x02: errores_detectados.append("102")
+            if meter_status & 0x04: errores_detectados.append("103")
+            if meter_status & 0x08: errores_detectados.append("104")
+            if meter_status & 0x10: errores_detectados.append("104")
+            if meter_status & 0x40: errores_detectados.append("105")
+            if meter_status & 0x80: errores_detectados.append("106")
+            if meter_status & 0x100: errores_detectados.append("107")
+            if meter_status & 0x200: errores_detectados.append("108")
+            if meter_status & 0x400: errores_detectados.append("108")
+            if meter_status & 0x800: errores_detectados.append("109")
+            if meter_status & 0x1000: errores_detectados.append("110")
+            if meter_status & 0x2000: errores_detectados.append("111")
+            
+        elif tipo_medidor == "ISOMAG":
+            flags2 = meter_status & 0xFF
+            if flags2 & 0x01: errores_detectados.append("120")
+            if flags2 & 0x02: errores_detectados.append("121")
+            if flags2 & 0x04: errores_detectados.append("122")
+            if flags2 & 0x08: errores_detectados.append("123")
+            if flags2 & 0x10: errores_detectados.append("124")
+            if flags2 & 0x20: errores_detectados.append("125")
+            if flags2 & 0x40: errores_detectados.append("126")
+            if flags2 & 0x80: errores_detectados.append("127")
+
+        if errores_detectados:
+            for cod in errores_detectados:
+                self.activar_ker_medidor(cod, f"Detectado en mapa de memoria: {meter_status}")
+        else:
+            self.activar_ker_medidor("112" if tipo_medidor == "Badger M2000" else "128", "Estado anormal no catalogado")
+
+    # =========================================================================
+    # WRAPPERS UNIVERSALES Y LECTURA PARA REPORTES
+    # =========================================================================
+    def log_error(self, codigo: str, mensaje: str, es_error_sistema: bool = True):
+        """Enruta excepciones genéricas hacia el motor KER correspondiente."""
+        if es_error_sistema or codigo.startswith("0") or codigo.startswith("3"):
+            self.activar_ker_sistema(codigo, mensaje)
+        else:
+            self.activar_ker_medidor(codigo, mensaje)
+
+    def log_evento(self, contexto: str, codigo_personalizado: str = "100"):
+        """Eventos operacionales impresos como INFO para la UI visual."""
+        mensaje = f"KER-{codigo_personalizado} [EVENTO] - {contexto}"
+        self.logger.info(mensaje)
+
+    def obtener_ker_para_reporte(self) -> str:
+        todos_los_activos = {**self._ker_sistema_activos, **self._ker_medidor_activos}
+        if not todos_los_activos:
+            return "000"
+        ultimo_ker = max(todos_los_activos.items(), key=lambda x: x[1])[0]
+        return ultimo_ker
+
+    # =========================================================================
+    # MECANISMOS DE DISCO DURO Y FILTRO ANTI-SPAM
+    # =========================================================================
+    def _escribir_log_fisico(self, nivel: int, codigo: str, contexto: str, resuelto: bool = False):
+        estado = "RESUELTO" if resuelto else "ACTIVO"
+        descripcion = self.KER_ERRORS.get(codigo, "Desconocido")
+        mensaje_base = f"KER-{codigo} [{estado}] - {descripcion} | {contexto}"
+        
         now = time.time()
         
-        # Lógica de historiales internos
-        if es_error_sistema:
-            self.ultimo_error_sistema = codigo
-            self.historial_errores_sistema.append({
-                'codigo': codigo,
-                'mensaje': mensaje_base,
-                'timestamp': now,
-                'fecha_hora': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'tipo': 'sistema'
-            })
-            if len(self.historial_errores_sistema) > 100:
-                self.historial_errores_sistema.pop(0)
-        else:
-            self.ultimo_error_medidor = codigo
-            self.historial_errores_medidor.append({
-                'codigo': codigo,
-                'mensaje': mensaje_base,
-                'timestamp': now,
-                'fecha_hora': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'tipo': 'medidor'
-            })
-            if len(self.historial_errores_medidor) > 100:
-                self.historial_errores_medidor.pop(0)
-        
-        # ==========================================
-        # APORTACIÓN: SUPRESIÓN DE REPETICIONES (Anti-Spam)
-        # ==========================================
-        if mensaje_base in self._spam_filter:
-            spam_data = self._spam_filter[mensaje_base]
-            # Si el error ocurrió hace menos del tiempo de gracia (SPAM_WINDOW)
-            if (now - spam_data['last_time']) < self.SPAM_WINDOW:
-                spam_data['count'] += 1
-                spam_data['last_time'] = now
-                return  # Omitimos el registro en el archivo de texto y consola visual
+        # Filtro Anti-Spam solo aplica a errores (Evitamos filtrar mensajes INFO útiles)
+        if nivel in [logging.ERROR, logging.WARNING]:
+            if mensaje_base in self._spam_filter:
+                spam_data = self._spam_filter[mensaje_base]
+                if (now - spam_data['last_time']) < self.SPAM_WINDOW:
+                    spam_data['count'] += 1
+                    spam_data['last_time'] = now
+                    return
+                else:
+                    if spam_data['count'] > 0:
+                        resumen = f"{mensaje_base} (Repetido {spam_data['count']} veces ocultas en los últimos {self.SPAM_WINDOW}s)"
+                        self.logger.log(nivel, resumen)
+                    self._spam_filter[mensaje_base] = {'last_time': now, 'count': 0}
             else:
-                # Si ya pasó el tiempo, verificamos si hubo repeticiones ocultas
-                if spam_data['count'] > 0:
-                    resumen = f"{mensaje_base} (Repetido {spam_data['count']} veces ocultas en los últimos {self.SPAM_WINDOW}s)"
-                    self.logger.error(resumen)
-                
-                # Reiniciamos el contador para este error
                 self._spam_filter[mensaje_base] = {'last_time': now, 'count': 0}
-        else:
-            # Es un error nuevo, lo registramos en el diccionario
-            self._spam_filter[mensaje_base] = {'last_time': now, 'count': 0}
-            
-        # Log error normal
-        self.logger.error(mensaje_base)
+                
+        self.logger.log(nivel, mensaje_base)
         
-        # Notificadores externos
-        if es_error_sistema:
+        if nivel == logging.ERROR:
             for canal in self.notificadores:
                 if hasattr(canal, 'enviar_alerta'):
                     try:
                         canal.enviar_alerta(mensaje_base)
-                    except Exception as e:
-                        self.logger.error(f"Error enviando alerta: {str(e)}")
+                    except Exception: pass
 
-    # (El resto de métodos de ErrorHandler se mantienen exactamente igual)
-    def reset_ker_normal(self):
-        self.ultimo_error_sistema = "000"
-    
-    def log_meter_error(self, meter_status: int, tipo_medidor: str = "Badger M2000"):
-        if meter_status == 0:
-            return
-        if tipo_medidor == "Badger M2000":
-            errors = []
-            if meter_status & 0x01: errors.append("101")
-            if meter_status & 0x02: errors.append("102")
-            if meter_status & 0x04: errors.append("103")
-            if meter_status & 0x08: errors.append("104")
-            if meter_status & 0x10: errors.append("104")
-            if meter_status & 0x40: errors.append("105")
-            if meter_status & 0x80: errors.append("106")
-            if meter_status & 0x100: errors.append("107")
-            if meter_status & 0x200: errors.append("108")
-            if meter_status & 0x400: errors.append("108")
-            if meter_status & 0x800: errors.append("109")
-            if meter_status & 0x1000: errors.append("110")
-            if meter_status & 0x2000: errors.append("111")
-            
-            if errors:
-                for code in errors:
-                    self.log_error(code, f"Badger reporta error: {meter_status} (0x{meter_status:04X})", es_error_sistema=False)
-            else:
-                self.log_error("112", f"Badger reporta estado desconocido: {meter_status} (0x{meter_status:04X})", es_error_sistema=False)
-        
-        elif tipo_medidor == "ISOMAG":
-            flags2 = meter_status & 0xFF
-            flags1 = (meter_status >> 8) & 0xFF
-            errors = []
-            if flags2 & 0x01: errors.append("120")
-            if flags2 & 0x02: errors.append("121")
-            if flags2 & 0x04: errors.append("122")
-            if flags2 & 0x08: errors.append("123")
-            if flags2 & 0x10: errors.append("124")
-            if flags2 & 0x20: errors.append("125")
-            if flags2 & 0x40: errors.append("126")
-            if flags2 & 0x80: errors.append("127")
-            
-            if errors:
-                for code in errors:
-                    self.log_error(code, f"ISOMAG reporta error: flags1=0x{flags1:02X}, flags2=0x{flags2:02X}", es_error_sistema=False)
-            else:
-                if flags2 != 0:
-                    self.log_error("128", f"ISOMAG reporta error no mapeado: flags1=0x{flags1:02X}, flags2=0x{flags2:02X}", es_error_sistema=False)
-                elif flags1 != 0:
-                    self.logger.info(f"ISOMAG estado operativo: flags1=0x{flags1:02X}, flags2=0x{flags2:02X}")
-    
-    def log_conexion(self, estado: bool, puerto: str):
-        mensaje = f"Conexión {'exitosa' if estado else 'fallida'} en {puerto}"
-        self.logger.info(mensaje)
-        if not estado:
-            self.log_error("005", f"Reconexión en progreso en {puerto}", es_error_sistema=True)
+    # =========================================================================
+    # MANEJO DE HISTORIAL EN MEMORIA RAM (Restaurado)
+    # =========================================================================
+    def _agregar_historial(self, codigo: str, contexto: str, tipo: str):
+        registro = {
+            'codigo': codigo,
+            'mensaje': f"KER-{codigo} | {contexto}",
+            'timestamp': time.time(),
+            'fecha_hora': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'tipo': tipo
+        }
+        if tipo == "sistema":
+            self.historial_errores_sistema.append(registro)
+            if len(self.historial_errores_sistema) > 100: self.historial_errores_sistema.pop(0)
+        else:
+            self.historial_errores_medidor.append(registro)
+            if len(self.historial_errores_medidor) > 100: self.historial_errores_medidor.pop(0)
 
-    def log_evento(self, contexto: str, codigo_personalizado: str = "100"):
-        mensaje = f"KER-{codigo_personalizado}: {contexto}"
-        self.logger.info(mensaje)
-
-    def get_ker_code(self) -> str: return self.ultimo_error_sistema
-    def get_meter_error_code(self) -> str: return self.ultimo_error_medidor
-
-    def get_ker_history(self, limit: int = 10, tipo: str = "sistema") -> List[Dict]:
+    def obtener_historial_ker(self, limite: int = 10, tipo: str = "sistema") -> List[Dict]:
         if tipo == "sistema": historial = self.historial_errores_sistema
         elif tipo == "medidor": historial = self.historial_errores_medidor
         else: historial = self.historial_errores_sistema + self.historial_errores_medidor
-        return historial[-limit:] if historial else []
+        return historial[-limite:] if historial else []
 
-    def clear_ker_history(self, tipo: str = "all"):
+    def limpiar_historial_ker(self, tipo: str = "all"):
         if tipo == "sistema" or tipo == "all": self.historial_errores_sistema = []
         if tipo == "medidor" or tipo == "all": self.historial_errores_medidor = []
 
-    def update_communication_errors(self, diagnostics: Dict[str, Dict[str, int]]):
+    def actualizar_errores_comunicacion(self, diagnostics: Dict[str, Dict[str, int]]):
         if not diagnostics: return
         for port in ['port_a', 'port_b']:
             if port in diagnostics:
@@ -278,7 +281,7 @@ class ErrorHandler:
                         self.errores_comunicacion[port][mapped_type] = count
                         if count > 0:
                             ker_code = self._get_communication_ker_code(port, mapped_type)
-                            self.log_error(ker_code, f"{mapped_type} errors in {port}: {count}", es_error_sistema=True)
+                            self.activar_ker_sistema(ker_code, f"{mapped_type} errors in {port}: {count}")
 
     def _get_communication_ker_code(self, port: str, error_type: str) -> str:
         mapping = {
@@ -289,25 +292,7 @@ class ErrorHandler:
         }
         return mapping.get((port, error_type), '211')
 
-    def get_communication_summary(self) -> str:
-        summary = []
-        for port, errors in self.errores_comunicacion.items():
-            for error_type, count in errors.items():
-                if count > 0: summary.append(f"{port.upper()}_{error_type.upper()}:{count}")
-        return ";".join(summary) if summary else "Sin errores de comunicación"
-
-    def reset_communication_errors(self):
-        for port in self.errores_comunicacion:
-            for error_type in self.errores_comunicacion[port]:
-                self.errores_comunicacion[port][error_type] = 0
-
-    def add_notificador(self, notificador):
-        if notificador not in self.notificadores: self.notificadores.append(notificador)
-
-    def remove_notificador(self, notificador):
-        if notificador in self.notificadores: self.notificadores.remove(notificador)
-
-    def get_error_summary(self) -> Dict:
+    def obtener_resumen_errores(self) -> Dict:
         return {
             'ultimo_error_sistema': self.ultimo_error_sistema,
             'ultimo_error_medidor': self.ultimo_error_medidor,

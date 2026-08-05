@@ -1,108 +1,59 @@
 # TESERACTO-UTR/GUI/Windows/DashboardWindow.py
 
-import logging
 import os
-import time
+from datetime import datetime
 from PyQt5.QtWidgets import (QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, 
                              QGroupBox, QPushButton, QMessageBox, QScrollArea)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QObject
-from PyQt5.QtGui import QColor, QPalette, QFont, QPixmap
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
+# Arquitectura renovada
+from Core.System.ThreadManager import thread_manager
 from Core.DataProcessing.Services import UnitConverter
 from Core.DataProcessing.DataProcessor import DataProcessor
 from Core.System.ConfigManager import ConfigManager
+from Core.System.PathManager import path_manager
 from Core.System.ErrorHandler import ErrorHandler
-from Core.System.StateManager import StateManager
-
-class DashboardWorker(QObject):
-    """Worker dedicado para lecturas del dashboard"""
-    data_ready = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    connection_status = pyqtSignal(bool)
-    
-    def __init__(self, medidor):
-        super().__init__()
-        self.medidor = medidor
-        self._is_running = True
-        self._last_successful_read = 0
-
-    def read_data(self):
-        """Lectura de datos en hilo de trabajo - VERSIÓN MEJORADA"""
-        if not self._is_running or not self.medidor:
-            return
-            
-        try:
-            # LECTURA CON TIMEOUT REDUCIDO PARA DASHBOARD
-            # Verificar si el medidor tiene el método seguro
-            if hasattr(self.medidor, 'leer_registros_seguro'):
-                datos = self.medidor.leer_registros_seguro(timeout=3.0)
-            else:
-                # FALLBACK: Usar método normal con manejo de timeout manual
-                self.logger = logging.getLogger(__name__)
-                self.logger.warning("Método leer_registros_seguro no disponible, usando lectura normal")
-                datos = self.medidor.leer_registros()
-            
-            if datos and any(datos.values()):  # Verificar que hay datos válidos
-                self._last_successful_read = time.time()
-                self.data_ready.emit(datos)
-                self.connection_status.emit(True)
-            else:
-                self.connection_status.emit(False)
-                self.error_occurred.emit("No se pudieron leer datos del medidor")
-                
-        except Exception as e:
-            self.connection_status.emit(False)
-            self.error_occurred.emit(f"Error en lectura: {str(e)}")
-
-    def stop(self):
-        """Detener worker"""
-        self._is_running = False
 
 class DashboardWindow(QWidget):
-    def __init__(self, medidor, error_handler: ErrorHandler):
+    def __init__(self, error_handler: ErrorHandler):
+        """
+        Nota: medidor_referencia se mantiene por compatibilidad temporal en la inicialización,
+        pero los datos se extraerán estrictamente del thread_manager.modbus_poller.
+        """
         super().__init__()
-        self.medidor = medidor
         self.error_handler = error_handler
         
         self.config_manager = ConfigManager()
-        self.unit_converter = UnitConverter()
-        
-        # NUEVO: Instanciamos el procesador de datos usando tu UnitConverter y ErrorHandler
-        self.data_processor = DataProcessor(self.unit_converter, self.error_handler)
+        self.convertidor_unidades = UnitConverter()
+        self.procesador_datos = DataProcessor(self.convertidor_unidades, self.error_handler)
         
         self.unidad_medidor = "m³/h"
         self.unidad_visual = self.config_manager.cargar_config_general().get("unidad_visualizacion", "m³/h")
-        self.unidad_volumen = "m³"
+        self.imagen_logo = self._cargar_imagen_logo()
         
-        self.logo_image = self.load_logo_image()
-        
-        # Worker y thread para lecturas
-        self.worker = None
-        self.worker_thread = None
-        
-        self.apply_dark_theme()
-        self.setup_ui()
-        self.setup_timers()
-        self.actualizar_unidades()
+        self._aplicar_tema_oscuro()
+        self._configurar_interfaz()
+        self._configurar_temporizador_visual()
+        self.actualizar_configuracion_unidades()
 
-    def load_logo_image(self):
+    def _cargar_imagen_logo(self):
+        """Carga la imagen del logo asegurando la ruta mediante PathManager."""
         try:
-            from Core.System.PathManager import path_manager
-            image_path = path_manager.get_image_path("LOGO2.jpeg")
-            
-            if image_path.exists():
-                pixmap = QPixmap(str(image_path))
+            ruta_imagen = path_manager.get_image_path("LOGO2.jpeg")
+            if ruta_imagen.exists():
+                pixmap = QPixmap(str(ruta_imagen))
                 return pixmap.scaled(320, 320, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             else:
-                # APORTACIÓN 1: Código oficial 301
-                self.error_handler.log_error("301", f"Imagen de logo no encontrada: {image_path}", es_error_sistema=True)
+                self.error_handler.log_error("301", f"Imagen de logo no encontrada: {ruta_imagen}", es_error_sistema=True)
                 return None
         except Exception as e:
-            # APORTACIÓN 1: Código oficial 301
             self.error_handler.log_error("301", f"Error cargando logo: {str(e)}", es_error_sistema=True)
             return None
 
-    def apply_dark_theme(self):
-        dark_theme = """
+    def _aplicar_tema_oscuro(self):
+        """Aplica la hoja de estilos general. (Los selectores CSS se mantienen en inglés por estándar web)"""
+        estilo_oscuro = """
             QWidget { background-color: #2b2b2b; color: #ffffff; border: none; font-size: 12pt; }
             QGroupBox { color: #ffffff; border: 1px solid #555; border-radius: 5px; margin-top: 10px; padding-top: 10px; font-weight: bold; font-size: 12pt; }
             QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 5px; color: #ffffff; font-size: 12pt; }
@@ -119,558 +70,476 @@ class DashboardWindow(QWidget):
             .connected-status { color: #81c784; font-weight: bold; font-size: 12pt; }
             .disconnected-status { color: #ff5252; font-weight: bold; font-size: 12pt; }
             .system-ok { color: #81c784; font-weight: bold; font-size: 12pt; }
-            .system-warning { color: #ffb74d; font-weight: bold; font-size: 12pt; }
             .system-error { color: #ff5252; font-weight: bold; font-size: 12pt; }
             .sensor-value { font-size: 22pt; font-family: Arial; }
             .error-code { font-size: 22pt; font-family: Consolas; }
             .status-label { font-size: 12pt; }
-            .logo-label { background-color: transparent; border: none; padding: 5px; }
         """
-        self.setStyleSheet(dark_theme)
+        self.setStyleSheet(estilo_oscuro)
 
-    def setup_ui(self):
-        # ✅ NUEVO: ENVOLTORIO MAESTRO PARA PANTALLAS TÁCTILES
-        window_layout = QVBoxLayout()
-        window_layout.setContentsMargins(0, 0, 0, 0)
+    def _configurar_interfaz(self):
+        """Construye todos los elementos visuales de la ventana."""
+        diseno_ventana = QVBoxLayout()
+        diseno_ventana.setContentsMargins(0, 0, 0, 0)
         
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        area_scroll = QScrollArea()
+        area_scroll.setWidgetResizable(True)
+        area_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        area_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
-        content_widget = QWidget()
-        content_widget.setStyleSheet("background-color: transparent;")
+        widget_contenido = QWidget()
+        widget_contenido.setStyleSheet("background-color: transparent;")
         
-        # --- AQUÍ COMIENZA TU DISEÑO ORIGINAL EXACTO ---
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(10)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        diseno_principal = QVBoxLayout()
+        diseno_principal.setSpacing(10)
+        diseno_principal.setContentsMargins(20, 20, 20, 20)
         
-        title_main_layout = QVBoxLayout()
-        title_main_layout.setSpacing(5)
+        # --- ENCABEZADO ---
+        diseno_titulo = QVBoxLayout()
+        diseno_titulo.setSpacing(5)
         
-        title_top_layout = QHBoxLayout()
+        diseno_superior_titulo = QHBoxLayout()
+        contenedor_titulo = QVBoxLayout()
         
-        title_container = QVBoxLayout()
-        self.title_label = QLabel("TESSERACTO UTR")
-        self.title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #ffffff;")
-        title_container.addWidget(self.title_label)
+        self.lbl_titulo = QLabel("TESSERACTO UTR")
+        self.lbl_titulo.setStyleSheet("font-size: 20pt; font-weight: bold; color: #ffffff;")
+        contenedor_titulo.addWidget(self.lbl_titulo)
         
-        self.system_status = QLabel("✅ Sistema operativo")
-        self.system_status.setProperty("class", "system-ok")
-        title_container.addWidget(self.system_status)
+        self.lbl_estado_sistema = QLabel("✅ Sistema operativo")
+        self.lbl_estado_sistema.setProperty("class", "system-ok")
+        contenedor_titulo.addWidget(self.lbl_estado_sistema)
         
-        title_top_layout.addLayout(title_container)
-        title_top_layout.addStretch()
+        diseno_superior_titulo.addLayout(contenedor_titulo)
+        diseno_superior_titulo.addStretch()
         
-        if self.logo_image:
-            logo_label = QLabel()
-            logo_label.setPixmap(self.logo_image)
-            logo_label.setProperty("class", "logo-label")
-            logo_label.setAlignment(Qt.AlignRight)
-            title_top_layout.addWidget(logo_label)
+        if self.imagen_logo:
+            lbl_logo = QLabel()
+            lbl_logo.setPixmap(self.imagen_logo)
+            lbl_logo.setAlignment(Qt.AlignRight)
+            diseno_superior_titulo.addWidget(lbl_logo)
         
-        title_main_layout.addLayout(title_top_layout)
-        main_layout.addLayout(title_main_layout)
+        diseno_titulo.addLayout(diseno_superior_titulo)
+        diseno_principal.addLayout(diseno_titulo)
         
-        separator = QLabel()
-        separator.setStyleSheet("background-color: #555; height: 2px;")
-        main_layout.addWidget(separator)
+        separador = QLabel()
+        separador.setStyleSheet("background-color: #555; height: 2px;")
+        diseno_principal.addWidget(separador)
         
-        data_group = QGroupBox("Datos de Medición")
-        data_layout = QGridLayout()
-        data_layout.setSpacing(15)
+        # --- PANEL DE DATOS ---
+        grupo_datos = QGroupBox("Datos de Medición")
+        diseno_datos = QGridLayout()
+        diseno_datos.setSpacing(15)
         
-        # --- COLUMNA 0: FLUJO INSTANTÁNEO ---
-        flow_label = QLabel("FLUJO INSTANTÁNEO:")
-        flow_label.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
-        data_layout.addWidget(flow_label, 0, 0)
+        # FLUJO INSTANTÁNEO
+        lbl_flujo = QLabel("FLUJO INSTANTÁNEO:")
+        lbl_flujo.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
+        diseno_datos.addWidget(lbl_flujo, 0, 0)
         
-        flow_container = QWidget()
-        flow_h_layout = QHBoxLayout(flow_container)
-        flow_h_layout.setContentsMargins(0, 0, 0, 0)
-        flow_h_layout.setSpacing(5)
+        contenedor_flujo = QWidget()
+        diseno_h_flujo = QHBoxLayout(contenedor_flujo)
+        diseno_h_flujo.setContentsMargins(0, 0, 0, 0)
         
-        self.flow_value = QLabel("--")
-        self.flow_value.setProperty("class", "flow-value")
-        self.flow_value.setMinimumWidth(120)
-        self.flow_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_valor_flujo = QLabel("--")
+        self.lbl_valor_flujo.setProperty("class", "flow-value")
+        self.lbl_valor_flujo.setMinimumWidth(120)
+        self.lbl_valor_flujo.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
-        self.flow_unit = QLabel("m³/h")
-        self.flow_unit.setProperty("class", "flow-unit")
+        self.lbl_unidad_flujo = QLabel("m³/h")
+        self.lbl_unidad_flujo.setProperty("class", "flow-unit")
         
-        flow_h_layout.addWidget(self.flow_value)
-        flow_h_layout.addWidget(self.flow_unit)
-        flow_h_layout.addStretch()
+        diseno_h_flujo.addWidget(self.lbl_valor_flujo)
+        diseno_h_flujo.addWidget(self.lbl_unidad_flujo)
+        diseno_h_flujo.addStretch()
+        diseno_datos.addWidget(contenedor_flujo, 1, 0)
         
-        data_layout.addWidget(flow_container, 1, 0)
+        # VOLUMEN ACUMULADO
+        lbl_volumen = QLabel("VOLUMEN ACUMULADO:")
+        lbl_volumen.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
+        diseno_datos.addWidget(lbl_volumen, 0, 1)
         
-        # --- COLUMNA 1: VOLUMEN ACUMULADO ---
-        volume_label = QLabel("VOLUMEN ACUMULADO:")
-        volume_label.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
-        data_layout.addWidget(volume_label, 0, 1)
+        contenedor_volumen = QWidget()
+        diseno_h_volumen = QHBoxLayout(contenedor_volumen)
+        diseno_h_volumen.setContentsMargins(0, 0, 0, 0)
         
-        volume_container = QWidget()
-        volume_h_layout = QHBoxLayout(volume_container)
-        volume_h_layout.setContentsMargins(0, 0, 0, 0)
-        volume_h_layout.setSpacing(5)
+        self.lbl_valor_volumen = QLabel("--")
+        self.lbl_valor_volumen.setProperty("class", "volume-value")
+        self.lbl_valor_volumen.setMinimumWidth(120)
+        self.lbl_valor_volumen.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
-        self.volume_value = QLabel("--")
-        self.volume_value.setProperty("class", "volume-value")
-        self.volume_value.setMinimumWidth(120)
-        self.volume_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_unidad_volumen = QLabel("m³")
+        self.lbl_unidad_volumen.setProperty("class", "volume-unit")
         
-        self.volume_unit = QLabel("m³")
-        self.volume_unit.setProperty("class", "volume-unit")
+        diseno_h_volumen.addWidget(self.lbl_valor_volumen)
+        diseno_h_volumen.addWidget(self.lbl_unidad_volumen)
+        diseno_h_volumen.addStretch()
+        diseno_datos.addWidget(contenedor_volumen, 1, 1)
         
-        volume_h_layout.addWidget(self.volume_value)
-        volume_h_layout.addWidget(self.volume_unit)
-        volume_h_layout.addStretch()
-        
-        data_layout.addWidget(volume_container, 1, 1)
-        
-        # --- COLUMNA 2: VELOCIDAD DE FLUJO ---
-        velocity_label = QLabel("VELOCIDAD DE FLUJO:")
-        velocity_label.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
-        data_layout.addWidget(velocity_label, 0, 2)
+        # VELOCIDAD DE FLUJO
+        lbl_velocidad = QLabel("VELOCIDAD DE FLUJO:")
+        lbl_velocidad.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
+        diseno_datos.addWidget(lbl_velocidad, 0, 2)
 
-        velocity_container = QWidget()
-        velocity_h_layout = QHBoxLayout(velocity_container)
-        velocity_h_layout.setContentsMargins(0, 0, 0, 0)
-        velocity_h_layout.setSpacing(5)
+        contenedor_velocidad = QWidget()
+        diseno_h_velocidad = QHBoxLayout(contenedor_velocidad)
+        diseno_h_velocidad.setContentsMargins(0, 0, 0, 0)
 
-        self.velocity_value = QLabel("--")
-        self.velocity_value.setProperty("class", "velocity-value")
-        self.velocity_value.setMinimumWidth(120)
-        self.velocity_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_valor_velocidad = QLabel("--")
+        self.lbl_valor_velocidad.setProperty("class", "velocity-value")
+        self.lbl_valor_velocidad.setMinimumWidth(120)
+        self.lbl_valor_velocidad.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.velocity_unit = QLabel("m/s")
-        self.velocity_unit.setProperty("class", "velocity-unit")
+        self.lbl_unidad_velocidad = QLabel("m/s")
+        self.lbl_unidad_velocidad.setProperty("class", "velocity-unit")
 
-        velocity_h_layout.addWidget(self.velocity_value)
-        velocity_h_layout.addWidget(self.velocity_unit)
-        velocity_h_layout.addStretch()
-
-        data_layout.addWidget(velocity_container, 1, 2)
+        diseno_h_velocidad.addWidget(self.lbl_valor_velocidad)
+        diseno_h_velocidad.addWidget(self.lbl_unidad_velocidad)
+        diseno_h_velocidad.addStretch()
+        diseno_datos.addWidget(contenedor_velocidad, 1, 2)
         
-        # --- DIRECCIÓN DE FLUJO ---
-        direction_label = QLabel("DIRECCIÓN DE FLUJO:")
-        direction_label.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
-        data_layout.addWidget(direction_label, 2, 0, 1, 3)
+        # DIRECCIÓN DE FLUJO
+        lbl_direccion = QLabel("DIRECCIÓN DE FLUJO:")
+        lbl_direccion.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 14pt;")
+        diseno_datos.addWidget(lbl_direccion, 2, 0, 1, 3)
         
-        self.direction_value = QLabel("--")
-        self.direction_value.setProperty("class", "stopped-flow")
-        data_layout.addWidget(self.direction_value, 3, 0, 1, 3)
+        self.lbl_valor_direccion = QLabel("--")
+        self.lbl_valor_direccion.setProperty("class", "stopped-flow")
+        diseno_datos.addWidget(self.lbl_valor_direccion, 3, 0, 1, 3)
         
-        data_group.setLayout(data_layout)
-        main_layout.addWidget(data_group)
+        grupo_datos.setLayout(diseno_datos)
+        diseno_principal.addWidget(grupo_datos)
        
-        # ✅ PANEL DE CONTROL DE TELEMETRÍA 
-        panel_control_hardware = QGroupBox("⚙️ Control de Telemetría (Modbus)")
-        layout_control = QHBoxLayout()
+        # --- CONTROLES DE TELEMETRÍA ---
+        grupo_control = QGroupBox("⚙️ Control de Telemetría (Modbus)")
+        diseno_control = QHBoxLayout()
         
-        self.btn_iniciar_lecturas = QPushButton("▶️ Comenzar Lecturas")
-        self.btn_iniciar_lecturas.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px;")
-        self.btn_iniciar_lecturas.clicked.connect(self._iniciar_telemetria)
+        self.btn_iniciar_telemetria = QPushButton("▶️ Comenzar Lecturas")
+        self.btn_iniciar_telemetria.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px;")
+        self.btn_iniciar_telemetria.clicked.connect(self._arrancar_telemetria)
         
-        self.btn_detener_lecturas = QPushButton("⏹️ Detener Lecturas")
-        self.btn_detener_lecturas.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 10px;")
-        self.btn_detener_lecturas.clicked.connect(self._detener_telemetria)
-        self.btn_detener_lecturas.setEnabled(False) # Inicia deshabilitado
+        self.btn_detener_telemetria = QPushButton("⏹️ Detener Lecturas")
+        self.btn_detener_telemetria.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 10px;")
+        self.btn_detener_telemetria.clicked.connect(self._pausar_telemetria)
+        self.btn_detener_telemetria.setEnabled(False)
         
-        layout_control.addWidget(self.btn_iniciar_lecturas)
-        layout_control.addWidget(self.btn_detener_lecturas)
-        panel_control_hardware.setLayout(layout_control)
+        diseno_control.addWidget(self.btn_iniciar_telemetria)
+        diseno_control.addWidget(self.btn_detener_telemetria)
+        grupo_control.setLayout(diseno_control)
+        diseno_principal.addWidget(grupo_control)
         
-        main_layout.addWidget(panel_control_hardware)
+        # --- ESTADÍSTICAS DEL SENSOR ---
+        diseno_info = QHBoxLayout()
+        diseno_info.setSpacing(10)
         
-        info_layout = QHBoxLayout()
-        info_layout.setSpacing(10)
+        grupo_estadisticas = QGroupBox("Estadísticas del Sensor")
+        diseno_estadisticas = QGridLayout()
         
-        sensor_stats_group = QGroupBox("Estadísticas del Sensor")
-        sensor_stats_layout = QGridLayout()
+        lbl_encendidos = QLabel("Encendidos:")
+        lbl_encendidos.setStyleSheet("font-weight: bold;")
+        diseno_estadisticas.addWidget(lbl_encendidos, 0, 0)
         
-        sensor_label_energizacion = QLabel("Encendidos:")
-        sensor_label_energizacion.setStyleSheet("font-weight: bold;")
-        sensor_stats_layout.addWidget(sensor_label_energizacion, 0, 0)
+        self.lbl_estadistica_encendidos = QLabel("N/A")
+        self.lbl_estadistica_encendidos.setProperty("class", "sensor-value")
+        diseno_estadisticas.addWidget(self.lbl_estadistica_encendidos, 0, 1)
         
-        self.lbl_energizacion = QLabel("N/A")
-        self.lbl_energizacion.setProperty("class", "sensor-value")
-        sensor_stats_layout.addWidget(self.lbl_energizacion, 0, 1)
+        lbl_errores = QLabel("Errores:")
+        lbl_errores.setStyleSheet("font-weight: bold;")
+        diseno_estadisticas.addWidget(lbl_errores, 1, 0)
         
-        sensor_label_errores = QLabel("Errores:")
-        sensor_label_errores.setStyleSheet("font-weight: bold;")
-        sensor_stats_layout.addWidget(sensor_label_errores, 1, 0)
+        self.lbl_estadistica_errores = QLabel("N/A")
+        self.lbl_estadistica_errores.setProperty("class", "sensor-value")
+        diseno_estadisticas.addWidget(self.lbl_estadistica_errores, 1, 1)
         
-        self.lbl_errores = QLabel("N/A")
-        self.lbl_errores.setProperty("class", "sensor-value")
-        sensor_stats_layout.addWidget(self.lbl_errores, 1, 1)
+        lbl_codigo_error = QLabel("Código Error:")
+        lbl_codigo_error.setStyleSheet("font-weight: bold;")
+        diseno_estadisticas.addWidget(lbl_codigo_error, 2, 0)
         
-        sensor_label_cod_error = QLabel("Código Error:")
-        sensor_label_cod_error.setStyleSheet("font-weight: bold;")
-        sensor_stats_layout.addWidget(sensor_label_cod_error, 2, 0)
+        self.lbl_codigo_hexadecimal = QLabel("N/A") 
+        self.lbl_codigo_hexadecimal.setProperty("class", "error-code")
+        diseno_estadisticas.addWidget(self.lbl_codigo_hexadecimal, 2, 1)
         
-        self.lbl_codigo_error = QLabel("N/A") 
-        self.lbl_codigo_error.setProperty("class", "error-code")
-        sensor_stats_layout.addWidget(self.lbl_codigo_error, 2, 1)
+        grupo_estadisticas.setLayout(diseno_estadisticas)
+        diseno_info.addWidget(grupo_estadisticas)
         
-        sensor_stats_group.setLayout(sensor_stats_layout)
-        info_layout.addWidget(sensor_stats_group)
+        # --- ESTADO Y UNIDADES ---
+        diseno_inferior = QHBoxLayout()
+        diseno_inferior.setSpacing(10)
         
-        bottom_layout = QHBoxLayout()
-        bottom_layout.setSpacing(10)
+        grupo_unidades = QGroupBox("Configuración de Unidades")
+        diseno_unidades = QVBoxLayout(grupo_unidades)
         
-        unit_box = QGroupBox("Configuración de Unidades")
-        unit_layout = QVBoxLayout(unit_box)
+        self.lbl_unidad_medidor_info = QLabel("Medidor: Cargando...")
+        self.lbl_unidad_visual_info = QLabel("Visualización: Cargando...")
         
-        self.medidor_unit_label = QLabel("Medidor: Cargando...")
-        self.visual_unit_label = QLabel("Visualización: Cargando...")
+        diseno_unidades.addWidget(self.lbl_unidad_medidor_info)
+        diseno_unidades.addWidget(self.lbl_unidad_visual_info)
+        diseno_inferior.addWidget(grupo_unidades)
         
-        unit_layout.addWidget(self.medidor_unit_label)
-        unit_layout.addWidget(self.visual_unit_label)
-        bottom_layout.addWidget(unit_box)
+        grupo_estado = QGroupBox("Estado de Conexión")
+        diseno_estado = QVBoxLayout(grupo_estado)
         
-        status_box = QGroupBox("Estado de Conexión")
-        status_layout = QVBoxLayout(status_box)
+        self.lbl_estado_conexion = QLabel("Desconectado")
+        self.lbl_estado_conexion.setProperty("class", "disconnected-status")
         
-        self.connection_status = QLabel("Desconectado")
-        self.connection_status.setProperty("class", "disconnected-status")
+        fecha_inicio = datetime.now()
+        lbl_inicio = QLabel(f"Inicio: {fecha_inicio.strftime('%d/%m/%Y %H:%M:%S')}")
+        lbl_inicio.setProperty("class", "status-label")
         
-        from datetime import datetime
-        self.startup_datetime = datetime.now()
-        self.startup_label = QLabel(f"Inicio: {self.startup_datetime.strftime('%d/%m/%Y %H:%M:%S')}")
-        self.startup_label.setProperty("class", "status-label")
+        self.lbl_ultima_actualizacion = QLabel("Última actualización: --:--:--")
+        self.lbl_ultima_actualizacion.setProperty("class", "status-label")
         
-        self.last_update = QLabel("Última actualización: --:--:--")
-        self.last_update.setProperty("class", "status-label")
+        diseno_estado.addWidget(self.lbl_estado_conexion)
+        diseno_estado.addWidget(lbl_inicio)
+        diseno_estado.addWidget(self.lbl_ultima_actualizacion)
+        diseno_inferior.addWidget(grupo_estado)
         
-        status_layout.addWidget(self.connection_status)
-        status_layout.addWidget(self.startup_label)
-        status_layout.addWidget(self.last_update)
-        bottom_layout.addWidget(status_box)
+        diseno_principal.addLayout(diseno_info)
+        diseno_principal.addLayout(diseno_inferior)
         
-        main_layout.addLayout(bottom_layout)
+        widget_contenido.setLayout(diseno_principal)
+        area_scroll.setWidget(widget_contenido)
+        diseno_ventana.addWidget(area_scroll)
         
-        # ✅ CIERRE DEL ENVOLTORIO
-        content_widget.setLayout(main_layout)
-        scroll.setWidget(content_widget)
-        window_layout.addWidget(scroll)
-        
-        self.setLayout(window_layout)
+        self.setLayout(diseno_ventana)
 
-    def setup_timers(self):
-        """Configura timers de forma segura. Timers de hardware inician pausados."""
-        # TIMER DE INTERFAZ (RÁPIDO) - EN HILO PRINCIPAL
-        self.ui_timer = QTimer(self)
-        self.ui_timer.timeout.connect(self.actualizar_ui)
-        self.ui_timer.start(1000)  # 1 segundo para UI
-        
-        # TIMER DE LECTURA (LENTO) - EN HILO DE TRABAJO
-        self.read_timer = QTimer(self)
-        self.read_timer.timeout.connect(self.iniciar_lectura_segura)
-        # ❌ NO DAMOS START AQUÍ
-        
-        self.unit_timer = QTimer(self)
-        self.unit_timer.timeout.connect(self.actualizar_unidades)
-        self.unit_timer.start(60000)
-        
-        self.connection_timer = QTimer(self)
-        self.connection_timer.timeout.connect(self.verificar_conexion)
-        # ❌ NO DAMOS START AQUÍ
-        
-        # INICIAR WORKER
-        self.setup_worker()
+    def _configurar_temporizador_visual(self):
+        """
+        ÚNICO temporizador del Dashboard. 
+        Su función es extraer la información de la memoria RAM.
+        NO realiza llamadas bloqueantes de red o hardware.
+        """
+        self.temporizador_interfaz = QTimer(self)
+        self.temporizador_interfaz.timeout.connect(self._consumir_datos_de_memoria)
+        # Se iniciará cuando el usuario presione "Comenzar Lecturas"
 
-    def setup_worker(self):
-        """Configura el worker para lecturas en hilo separado"""
-        if self.medidor:
-            self.worker = DashboardWorker(self.medidor)
-            self.worker_thread = QThread()
+    def _arrancar_telemetria(self):
+        """Ordena al Orquestador encender el motor de hardware y activa la actualización visual."""
+        config_path = path_manager.get_config_path("sensor_config.json")
+        if not config_path.exists():
+            QMessageBox.warning(self, "Atención", "No hay configuración de sensor guardada. Vaya a Configuración Hardware primero.")
+            return
+
+        # 1. Ordenar al Orquestador (ThreadManager) arrancar el Productor
+        thread_manager.arrancar_hardware()
+        
+        # 2. Iniciar el Consumidor (Actualización visual cada segundo)
+        self.temporizador_interfaz.start(1000)
             
-            # Mover worker al hilo
-            self.worker.moveToThread(self.worker_thread)
-            
-            # Conectar señales
-            self.worker.data_ready.connect(self.procesar_datos)
-            self.worker.error_occurred.connect(self.manejar_error_lectura)
-            self.worker.connection_status.connect(self.actualizar_estado_conexion)
-            
-            # Iniciar hilo
-            self.worker_thread.start()
+        self.btn_iniciar_telemetria.setEnabled(False)
+        self.btn_detener_telemetria.setEnabled(True)
+        self.btn_iniciar_telemetria.setText("Lecturas en Proceso...")
+        self.actualizar_configuracion_unidades()
 
-    def iniciar_lectura_segura(self):
-        """Inicia lectura de forma segura en hilo de trabajo"""
-        if self.worker and hasattr(self.worker, 'read_data'):
-            # Ejecutar en el hilo del worker
-            QTimer.singleShot(0, self.worker.read_data)
+    def _pausar_telemetria(self):
+        """Inicia la secuencia de apagado de forma asíncrona para evitar congelamientos."""
+        # 1. Detener inmediatamente el Consumidor Visual (UI Thread)
+        self.temporizador_interfaz.stop()
+        
+        # 2. Proporcionar retroalimentación visual instantánea al usuario
+        self.btn_detener_telemetria.setEnabled(False)
+        self.btn_iniciar_telemetria.setEnabled(False) # Bloqueado hasta que termine el apagado
+        self.btn_iniciar_telemetria.setText("⏳ Deteniendo hardware...")
+        
+        self.lbl_estado_conexion.setText("Cerrando puertos de comunicación...")
+        self.lbl_estado_conexion.setProperty("class", "stopped-flow")
+        self._refrescar_estilo_css(self.lbl_estado_conexion)
 
-    def procesar_datos(self, datos_crudos):
-        """Procesa datos recibidos del worker (en hilo principal)"""
+        # 3. Delegar la destrucción del hilo Productor a un proceso en segundo plano
+        self.worker_detener = self.WorkerDetenerTelemetria()
+        self.worker_detener.finished.connect(self._telemetria_detenida_callback)
+        self.worker_detener.start()
+
+    def _telemetria_detenida_callback(self):
+        """Se ejecuta cuando el hardware ha liberado completamente la memoria y los puertos."""
+        self.btn_iniciar_telemetria.setEnabled(True)
+        self.btn_iniciar_telemetria.setText("▶️ Comenzar Lecturas")
+        
+        self.lbl_estado_conexion.setText("Detenido (Manual)")
+        self._refrescar_estilo_css(self.lbl_estado_conexion)
+        self.lbl_estado_sistema.setText("✅ Sistema en espera")
+        self._refrescar_estilo_css(self.lbl_estado_sistema)
+    
+    def _consumir_datos_de_memoria(self):
+        """
+        Extrae el Payload de la memoria RAM del ModbusPoller y actualiza la UI.
+        Complejidad temporal O(1), ejecución instantánea.
+        """
         try:
-            # Transformamos los datos crudos del medidor usando la escala configurada en ConfigWindow
-            datos = self.data_processor.process(datos_crudos, self.medidor.perfil)
+            # Actualizar hora visual
+            self.lbl_ultima_actualizacion.setText(f"Última actualización: {datetime.now().strftime('%H:%M:%S')}")
             
-            # ========== VERIFICACIÓN PARA RESET KER ==========
-            # Si tenemos datos válidos y el sistema está operativo, resetear KER
-            datos_son_validos = datos and any(v is not None for v in datos.values())
-            
-            if datos_son_validos:
-                # Verificar que no hay errores del medidor
-                estado_operativo = True
+            # Obtener instancia activa del Poller desde el Orquestador central
+            poller = thread_manager.modbus_poller
+            if not poller:
+                self._aplicar_estado_visual_error("Esperando motor...")
+                return
                 
-                # Para ISOMAG, verificar flags de error
-                if hasattr(self.medidor, 'perfil') and self.medidor.perfil.get("tipo_medidor") == "ISOMAG":
-                    errores = datos.get("errores_sensor", {})
-                    if isinstance(errores, dict) and any(errores.values()):
-                        estado_operativo = False
-                
-                # Para Badger, verificar estado del medidor
-                elif hasattr(self.medidor, 'leer_estado_medidor'):
-                    try:
-                        estado = self.medidor.leer_estado_medidor()
-                        if estado and estado.get('meter_status', 0) != 0:
-                            estado_operativo = False
-                    except Exception:
-                        estado_operativo = True  # Si falla, asumir operativo
-                
-                # ✅ RESETEAR KER SI TODO ESTÁ BIEN
-                if estado_operativo:
-                    if hasattr(self.error_handler, 'reset_ker_normal'):
-                        self.error_handler.reset_ker_normal()
-            # ========== FIN VERIFICACIÓN KER ==========
+            # Extraer Payload de la RAM (Sin esperas)
+            paquete = poller.obtener_ultimo_paquete()
             
-            # ACTUALIZAR INTERFAZ CON DATOS NUEVOS
-            flujo_valor = datos.get("flujo_instantaneo", 0.0) or 0.0
+            if paquete["timestamp"] == 0.0:
+                self._aplicar_estado_visual_error("Inicializando sensor...")
+                return
+
+            if not paquete["estado_conexion"] or paquete["codigo_error"] != "000":
+                self._aplicar_estado_visual_error(f"Error {paquete['codigo_error']}")
+                return
+
+            # Si llegamos aquí, los datos son válidos
+            self._aplicar_estado_visual_conectado()
+            self._procesar_y_dibujar_datos(paquete["datos_crudos"], poller.medidor.perfil)
             
-            flujo_convertido = self.unit_converter.convert(
+        except Exception as e:
+            self.error_handler.log_error("010", f"Error crítico al consumir memoria RAM: {e}", es_error_sistema=True)
+
+    def _procesar_y_dibujar_datos(self, datos_crudos: dict, perfil: dict):
+        """Aplica factores de escala matemáticos y dibuja en pantalla."""
+        try:
+            datos_procesados = self.procesador_datos.process(datos_crudos, perfil)
+            
+            flujo_valor = datos_procesados.get("flujo_instantaneo", 0.0) or 0.0
+            flujo_convertido = self.convertidor_unidades.convert(
                 flujo_valor,
                 self.unidad_medidor,
                 self.unidad_visual
             )
             
-            volumen_valor = datos.get("flujo_acumulado", 0.0) or 0.0
-            velocidad_valor = datos.get("velocidad_flujo", 0.0) or 0.0
-            direccion_valor = datos.get("direccion_flujo", 0) or 0
+            volumen_valor = datos_procesados.get("flujo_acumulado", 0.0) or 0.0
+            velocidad_valor = datos_procesados.get("velocidad_flujo", 0.0) or 0.0
+            direccion_valor = datos_procesados.get("direccion_flujo", 0) or 0
             
-            # ACTUALIZAR WIDGETS (OPERACIÓN RÁPIDA)
-            self.flow_value.setText(f"{flujo_convertido:.3f}")
-            self.volume_value.setText(f"{volumen_valor:.2f}")
-            self.velocity_value.setText(f"{velocidad_valor:.3f}")
+            self.lbl_valor_flujo.setText(f"{flujo_convertido:.3f}")
+            self.lbl_valor_volumen.setText(f"{volumen_valor:.2f}")
+            self.lbl_valor_velocidad.setText(f"{velocidad_valor:.3f}")
             
-            # DIRECCIÓN DE FLUJO COMPATIBLE CON AMBOS MEDIDORES
-            if direccion_valor == 2:  # Flujo negativo
-                self.direction_value.setText("⬅️ NEGATIVA")
-                self.direction_value.setProperty("class", "negative-flow")
-            elif direccion_valor == 1:  # Flujo positivo
-                self.direction_value.setText("➡️ POSITIVA") 
-                self.direction_value.setProperty("class", "positive-flow")
-            else:  # Detenido o desconocido
-                self.direction_value.setText("⏹️ DETENIDO")
-                self.direction_value.setProperty("class", "stopped-flow")
-                
-            self.style().unpolish(self.direction_value)
-            self.style().polish(self.direction_value)
-            
-            # VERIFICACIÓN DE ESTADO COMPATIBLE CON AMBOS MEDIDORES
-            estado_operativo = True
-            
-            # Para ISOMAG, verificar flags de error
-            if hasattr(self.medidor, 'perfil') and self.medidor.perfil.get("tipo_medidor") == "ISOMAG":
-                errores = datos.get("errores_sensor", {})
-                if isinstance(errores, dict) and any(errores.values()):
-                    estado_operativo = False
-            
-            # Para Badger, verificar estado del medidor
-            elif hasattr(self.medidor, 'leer_estado_medidor'):
-                try:
-                    estado = self.medidor.leer_estado_medidor()
-                    if estado and estado.get('meter_status', 0) != 0:
-                        estado_operativo = False
-                except Exception:
-                    estado_operativo = True  # Si falla, asumir operativo
-            
-            if estado_operativo:
-                self.system_status.setText("✅ Sistema operativo")
-                self.system_status.setProperty("class", "system-ok")
+            # Formato Visual Dirección
+            if direccion_valor == 2:
+                self.lbl_valor_direccion.setText("⬅️ NEGATIVA")
+                self.lbl_valor_direccion.setProperty("class", "negative-flow")
+            elif direccion_valor == 1:
+                self.lbl_valor_direccion.setText("➡️ POSITIVA") 
+                self.lbl_valor_direccion.setProperty("class", "positive-flow")
             else:
-                self.system_status.setText("⚠️ Error en medidor")
-                self.system_status.setProperty("class", "system-error")
-                
-            self.style().unpolish(self.system_status)
-            self.style().polish(self.system_status)
+                self.lbl_valor_direccion.setText("⏹️ DETENIDO")
+                self.lbl_valor_direccion.setProperty("class", "stopped-flow")
+            self._refrescar_estilo_css(self.lbl_valor_direccion)
             
-            # 🔧 CORRECCIÓN: ACTUALIZAR ESTADÍSTICAS CON NOMBRE CORREGIDO
+            # Estadísticas Inferiores
+            energizacion = datos_procesados.get('contador_energizacion', None)
+            self.lbl_estadistica_encendidos.setText(str(energizacion) if energizacion is not None else "N/A")
+            
+            errores = datos_procesados.get('errores_sensor', {})
+            errores_text = []
+            if isinstance(errores, dict):
+                if errores.get('sensor_fault', False) or errores.get('coils_excitation_error', False): errores_text.append("Sensor")
+                if errores.get('over_range', False) or errores.get('flow_rate_overflow', False): errores_text.append("Rango")
+                if errores.get('empty_pipe', False) or errores.get('pipe_empty', False): errores_text.append("Tubería")
+            self.lbl_estadistica_errores.setText(", ".join(errores_text) if errores_text else "Ninguno")
+            
+            cod_error = datos_procesados.get('codigo_error', None)
+            if cod_error is not None:
+                self.lbl_codigo_hexadecimal.setText(f"{cod_error:04X}")
+            else:
+               self.lbl_codigo_hexadecimal.setText("N/A")
+
+            # Evaluación de Salud para el KER
+            if not errores_text and cod_error in (0, None, 65535):
+                if hasattr(self.error_handler, 'reset_ker_normal'):
+                    self.error_handler.reset_ker_normal()
+
+        except Exception as e:
+            self.error_handler.log_error("010", f"Error renderizando interfaz: {e}", es_error_sistema=True)
+
+    def _aplicar_estado_visual_error(self, mensaje: str):
+        self.lbl_estado_sistema.setText("⚠️ Error en lectura")
+        self.lbl_estado_sistema.setProperty("class", "system-error")
+        self._refrescar_estilo_css(self.lbl_estado_sistema)
+        
+        self.lbl_estado_conexion.setText(mensaje)
+        self.lbl_estado_conexion.setProperty("class", "disconnected-status")
+        self._refrescar_estilo_css(self.lbl_estado_conexion)
+
+    def _aplicar_estado_visual_conectado(self):
+        self.lbl_estado_sistema.setText("✅ Sistema operativo")
+        self.lbl_estado_sistema.setProperty("class", "system-ok")
+        self._refrescar_estilo_css(self.lbl_estado_sistema)
+        
+        self.lbl_estado_conexion.setText("Conectado y Transmitiendo")
+        self.lbl_estado_conexion.setProperty("class", "connected-status")
+        self._refrescar_estilo_css(self.lbl_estado_conexion)
+
+    def _refrescar_estilo_css(self, widget):
+        """Fuerza al motor de PyQt5 a recalcular el CSS del widget."""
+        self.style().unpolish(widget)
+        self.style().polish(widget)
+
+    # =========================================================================
+    # LÓGICA ASÍNCRONA PARA UNIDADES
+    # =========================================================================
+    class WorkerUnidadFlujo(QThread):
+        finished = pyqtSignal(str)
+        
+        def __init__(self, medidor):
+            super().__init__()
+            self.medidor = medidor
+            
+        def run(self):
             try:
-                energizacion = datos.get('contador_energizacion', None)
-                self.lbl_energizacion.setText(str(energizacion) if energizacion is not None else "N/A")
-                
-                errores = datos.get('errores_sensor', {})
-                errores_text = []
-                if isinstance(errores, dict):
-                    # Compatible con ambos medidores
-                    if errores.get('sensor_fault', False) or errores.get('coils_excitation_error', False):
-                        errores_text.append("Sensor")
-                    if errores.get('over_range', False) or errores.get('flow_rate_overflow', False):
-                        errores_text.append("Rango")
-                    if errores.get('empty_pipe', False) or errores.get('pipe_empty', False):
-                        errores_text.append("Tubería")
-                self.lbl_errores.setText(", ".join(errores_text) if errores_text else "Ninguno")
-                
-                cod_error = datos.get('codigo_error', None)
-                if cod_error is not None:
-                    self.lbl_codigo_error.setText(f"{cod_error:04X}")
-                else:
-                   self.lbl_codigo_error.setText("N/A")
+                # Lectura de hardware aislada del hilo principal
+                unidad = self.medidor.obtener_unidad_flujo()
+                self.finished.emit(unidad if unidad else "")
+            except Exception:
+                self.finished.emit("")
+
+    def actualizar_configuracion_unidades(self):
+        """Sincroniza las etiquetas visuales de forma ASÍNCRONA."""
+        try:
+            config = self.config_manager.cargar_config_general()
+            self.unidad_visual = config.get("unidad_visualizacion", "m³/h")
             
+            poller = thread_manager.modbus_poller
+            if poller and poller.medidor:
+                # 1. Carga inmediata del default del JSON para no dejar la UI vacía
+                perfil_activo = poller.medidor.perfil
+                self.unidad_medidor = perfil_activo.get("unidad_flujo_default", "m³/h")
+                self._actualizar_textos_unidades()
+                
+                # 2. Invocación Asíncrona: Delegamos la lectura física a un hilo secundario
+                self.worker_unidad = self.WorkerUnidadFlujo(poller.medidor)
+                self.worker_unidad.finished.connect(self._aplicar_unidad_real)
+                self.worker_unidad.start()
+            else:
+                self.unidad_medidor = "m³/h"
+                self._actualizar_textos_unidades()
+            
+        except Exception as e:
+            self.error_handler.log_error("303", f"Fallo al actualizar unidades: {e}", es_error_sistema=True)
+
+    def _aplicar_unidad_real(self, unidad_real: str):
+        """Callback ejecutado cuando el hilo secundario termina de interrogar al medidor."""
+        if unidad_real:
+            self.unidad_medidor = unidad_real
+        self._actualizar_textos_unidades()
+
+    def _actualizar_textos_unidades(self):
+        """Actualiza puramente los elementos gráficos en el hilo principal."""
+        self.lbl_unidad_medidor_info.setText(f"Medidor transmite en: {self.unidad_medidor}")
+        self.lbl_unidad_visual_info.setText(f"Visualizando en: {self.unidad_visual}")
+        self.lbl_unidad_flujo.setText(self.unidad_visual)
+        
+    class WorkerDetenerTelemetria(QThread):
+        """
+        Hilo sepulturero.
+        Absorbe la latencia de apagado del hardware (Timeouts residuales)
+        para garantizar que la UI se mantenga responsiva al 100%.
+        """
+        finished = pyqtSignal()
+        
+        def run(self):
+            try:
+                # La orden de detención y liberación de memoria ocurre en segundo plano
+                thread_manager.detener_hardware()
+                self.finished.emit()
             except Exception as e:
-                # APORTACIÓN 1: Código oficial 010
-                self.error_handler.log_error("010", f"Error actualizando estadísticas visuales: {str(e)}", es_error_sistema=True)
-            
-        except Exception as e:
-            # APORTACIÓN 1: Código oficial 010
-            self.error_handler.log_error("010", f"Error procesando datos en dashboard: {str(e)}", es_error_sistema=True)
-
-    def actualizar_ui(self):
-        """Actualización rápida de UI (siempre en hilo principal)"""
-        # Solo operaciones rápidas de UI aquí
-        try:
-            from datetime import datetime
-            current_time = datetime.now()
-            self.last_update.setText(f"Última actualización: {current_time.strftime('%H:%M:%S')}")
-        except Exception as e:
-            pass  # No bloquear por errores de UI
-
-    def verificar_conexion(self):
-        try:
-            if self.medidor and hasattr(self.medidor, 'client') and self.medidor.client.connected:
-                self.connection_status.setText("Conectado")
-                self.connection_status.setProperty("class", "connected-status")
-            else:
-                self.connection_status.setText("Desconectado")
-                self.connection_status.setProperty("class", "disconnected-status")
-                
-            self.style().unpolish(self.connection_status)
-            self.style().polish(self.connection_status)
-                
-        except Exception as e:
-            # APORTACIÓN 1: Código oficial 007
-            self.error_handler.log_error("007", f"Error verificando conexión visual: {str(e)}", es_error_sistema=True)
-
-    def actualizar_unidades(self):
-        try:
-            # 1. Solo consultar al medidor si las lecturas están activas
-            if self.read_timer.isActive() and self.medidor and hasattr(self.medidor, 'obtener_unidad_flujo'):
-                self.unidad_medidor = self.medidor.obtener_unidad_flujo()
-            else:
-                # Si está pausado, usamos la caché del perfil o un valor por defecto
-                if self.medidor and hasattr(self.medidor, 'perfil'):
-                    self.unidad_medidor = self.medidor.perfil.get("unidad_flujo_default", "m³/h")
-                else:
-                    self.unidad_medidor = "m³/h"
-            
-            # 2. Cargar configuración visual de todas formas
-            config = self.config_manager.cargar_config_general()
-            self.unidad_visual = config.get("unidad_visualizacion", "m³/h")
-            
-            # 3. Actualizar la interfaz
-            self.medidor_unit_label.setText(f"Medidor: {self.unidad_medidor}")
-            self.visual_unit_label.setText(f"Visualización: {self.unidad_visual}")
-            self.flow_unit.setText(self.unidad_visual)
-            
-        except Exception as e:
-            # APORTACIÓN 1: Código oficial 303
-            self.error_handler.log_error("303", f"Error de conversión actualizando unidades: {str(e)}", es_error_sistema=True)
-            self.unidad_medidor = "m³/h"
-            self.unidad_visual = "m³/h"
-
-    def manejar_error_lectura(self, mensaje_error):
-        """Maneja errores de lectura desde el worker"""
-        # APORTACIÓN 1: Código oficial 007
-        self.error_handler.log_error("007", mensaje_error, es_error_sistema=True)
-        self.system_status.setText("⚠️ Error en lectura")
-        self.system_status.setProperty("class", "system-error")
-
-    def actualizar_estado_conexion(self, conectado):
-        """Actualiza estado de conexión desde el worker"""
-        if conectado:
-            self.connection_status.setText("Conectado")
-            self.connection_status.setProperty("class", "connected-status")
-        else:
-            self.connection_status.setText("Desconectado")
-            self.connection_status.setProperty("class", "disconnected-status")
-
-    def refresh_unit_config(self):
-        try:
-            config = self.config_manager.cargar_config_general()
-            self.unidad_visual = config.get("unidad_visualizacion", "m³/h")
-            
-            self.visual_unit_label.setText(f"Visualización: {self.unidad_visual}")
-            self.flow_unit.setText(self.unidad_visual)
-            
-            # También podemos forzar una actualización de datos
-            self.iniciar_lectura_segura()
-            
-        except Exception as e:
-            # APORTACIÓN 1: Código oficial 301
-            self.error_handler.log_error("301", f"Error refrescando configuración visual: {str(e)}", es_error_sistema=True)
-
-    def closeEvent(self, event):
-        """Cierre seguro liberando recursos"""
-        # DETENER WORKER PRIMERO
-        if self.worker:
-            self.worker.stop()
-            
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-            self.worker_thread.wait(2000)  # Esperar máximo 2 segundos
-            
-        # DETENER TIMERS
-        if hasattr(self, 'ui_timer'):
-            self.ui_timer.stop()
-        if hasattr(self, 'read_timer'):
-            self.read_timer.stop()
-        if hasattr(self, 'unit_timer'):
-            self.unit_timer.stop()
-        if hasattr(self, 'connection_timer'):
-            self.connection_timer.stop()
-        
-        event.accept()
-
-    def _iniciar_telemetria(self):
-        """Inicia el hilo de lectura Modbus a petición del usuario"""
-        import os
-        from Core.System.PathManager import path_manager
-        
-        config_path = path_manager.get_config_path("sensor_config.json")
-        if not os.path.exists(config_path):
-            QMessageBox.warning(self, "Atención", "No hay configuración de sensor guardada. Vaya a Configuración Hardware primero.")
-            return
-
-        # Solo arrancamos los temporizadores locales del Dashboard
-        self.read_timer.start(30000)
-        self.connection_timer.start(30000)
-        
-        # Ejecutar primera lectura inmediata
-        self.iniciar_lectura_segura()
-            
-        self.btn_iniciar_lecturas.setEnabled(False)
-        self.btn_detener_lecturas.setEnabled(True)
-        self.btn_iniciar_lecturas.setText("Lecturas en Proceso...")
-
-    def _detener_telemetria(self):
-        """Detiene el hilo de lectura de forma segura"""
-        self.read_timer.stop()
-        self.connection_timer.stop()
-            
-        self.btn_iniciar_lecturas.setEnabled(True)
-        self.btn_detener_lecturas.setEnabled(False)
-        self.btn_iniciar_lecturas.setText("▶️ Comenzar Lecturas")
-        self.connection_status.setText("Detenido (Manual)")
-        self.connection_status.setProperty("class", "stopped-flow")
-        self.style().unpolish(self.connection_status)
-        self.style().polish(self.connection_status)
-
-    def actualizar_referencia_worker(self, nuevo_medidor):
-        """Actualiza el medidor del worker cuando ConfigWindow cambia de medidor"""
-        if self.worker:
-            self.worker.medidor = nuevo_medidor
+                import logging
+                logging.error(f"Error asíncrono al detener hardware: {e}")
+                self.finished.emit()

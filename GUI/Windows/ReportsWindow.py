@@ -1,4 +1,4 @@
-# TESERACTO-UTR/GUI/Windows/ReportsWindow.py 
+# TESERACTO-UTR/GUI/Windows/ReportsWindow.py
 
 import os
 import schedule
@@ -6,24 +6,23 @@ import time
 import shutil
 from datetime import datetime
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QPushButton, QLabel, 
-                            QGroupBox, QMessageBox, QHBoxLayout, QLineEdit)
-from PyQt5.QtCore import QTimer
+                            QGroupBox, QMessageBox, QHBoxLayout, QLineEdit, QTextEdit)
+from PyQt5.QtCore import QTimer, Qt
+
 from Core.System.ConfigManager import ConfigManager
 from Core.System.StateManager import StateManager
 from Core.System.ErrorHandler import ErrorHandler
 from Core.System.PathManager import path_manager
 from Core.DataProcessing.Services import RecordFormatter, ConfigProvider, BitmaskConverter, FileNameGenerator, UnitConverter
 from Core.DataProcessing.DataProcessor import DataProcessor
+from Core.System.ThreadManager import thread_manager
 
 class ReportsWindow(QWidget):
-    def __init__(self, medidor, error_handler: ErrorHandler, usb_manejador=None):
+    def __init__(self, error_handler: ErrorHandler):
         super().__init__()
-        self.medidor = medidor
         self.error_handler = error_handler
-        self.usb_manejador = usb_manejador
         
-        # APORTACIÓN: Instanciar el DataProcessor
-        self.data_processor = DataProcessor(UnitConverter())
+        self.data_processor = DataProcessor(UnitConverter(), self.error_handler)
         
         self.setStyleSheet("""
             QWidget { background-color: #2b2b2b; color: #cccccc; font-family: Segoe UI; }
@@ -34,22 +33,49 @@ class ReportsWindow(QWidget):
             QPushButton:disabled { background-color: #3b3b3b; color: #777; border: 1px solid #444; }
             QGroupBox { color: #cccccc; background-color: #2b2b2b; border: 1px solid #444444; border-radius: 5px; margin-top: 1ex; padding-top: 10px; font-weight: bold; }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; color: #cccccc; }
-            QLineEdit { background-color: #3b3b3b; color: white; border: 1px solid #555555; border-radius: 3px; padding: 5px; }
-            QLineEdit:read-only { background-color: #333333; color: #4fc3f7; font-weight: bold; }
+            QLineEdit, QTextEdit { background-color: #3b3b3b; color: white; border: 1px solid #555555; border-radius: 3px; padding: 5px; }
+            QLineEdit:read-only, QTextEdit:read-only { background-color: #333333; color: #4fc3f7; font-weight: bold; }
         """)
         
         # Widgets
         self.combo_formato = QComboBox()
         self.combo_formato.addItems(["Medidor", "SistemaMedicion"])
+        
+        # Sincronizar el combobox con el valor guardado
+        config = ConfigManager.cargar_config_general()
+        formato_guardado = config.get("report_type", "Medidor")
+        idx = self.combo_formato.findText(formato_guardado)
+        if idx >= 0:
+            self.combo_formato.setCurrentIndex(idx)
+            
         self.btn_generar = QPushButton("Generar TXT Manual")
+        self.btn_generar.setMinimumHeight(35)
         self.lbl_status = QLabel("Seleccione formato y pulse Generar")
+        
+        self.texto_vista_previa = QTextEdit()
+        self.texto_vista_previa.setReadOnly(True)
+        self.texto_vista_previa.setMinimumHeight(80)
+        self.texto_vista_previa.setStyleSheet("background-color: #1e1e1e; color: #81c784; font-family: Consolas; font-size: 11pt;")
         
         # Layout principal
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Formato de Reporte:"))
-        layout.addWidget(self.combo_formato)
-        layout.addWidget(self.btn_generar)
-        layout.addWidget(self.lbl_status)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        titulo = QLabel("Gestión de Reportes Diarios")
+        titulo.setStyleSheet("font-size: 16pt; font-weight: bold; color: #ffffff;")
+        titulo.setAlignment(Qt.AlignCenter)
+        layout.addWidget(titulo)
+        
+        config_group = QGroupBox("Configuración y Vista Previa")
+        config_layout = QVBoxLayout()
+        config_layout.addWidget(QLabel("Formato de Reporte:"))
+        config_layout.addWidget(self.combo_formato)
+        config_layout.addWidget(self.btn_generar)
+        config_layout.addWidget(self.lbl_status)
+        config_layout.addWidget(self.texto_vista_previa)
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
         
         # Sección USB (Automática)
         historical_group = QGroupBox("COPIADO DE REPORTE TXT HISTÓRICO A USB")
@@ -71,22 +97,26 @@ class ReportsWindow(QWidget):
         historical_layout.addLayout(usb_layout)
 
         self.copy_btn = QPushButton("Copiar histórico a la USB detectada")
+        self.copy_btn.setMinimumHeight(35)
         self.copy_btn.setEnabled(False) # Deshabilitado hasta que haya USB
         self.copy_btn.clicked.connect(self.copy_historical_txt)
         historical_layout.addWidget(self.copy_btn)
 
         historical_group.setLayout(historical_layout)
         layout.addWidget(historical_group)
+        
+        layout.addStretch()
         self.setLayout(layout)
         
         # Conexiones y Timers
         self.btn_generar.clicked.connect(self.iniciar_proceso_reportes)
+        self.combo_formato.currentIndexChanged.connect(self.update_historical_path)
         
         self.timer = QTimer()
         self.timer.timeout.connect(self.verificar_tareas_programadas)
         self.timer.start(60000)
         
-        # APORTACIÓN: Timer para escanear USB visualmente
+        # Timer para escanear USB usando la información del orquestador
         self.usb_ui_timer = QTimer()
         self.usb_ui_timer.timeout.connect(self.actualizar_estado_usb)
         self.usb_ui_timer.start(2000)
@@ -94,27 +124,40 @@ class ReportsWindow(QWidget):
         self.update_historical_path()
 
     def actualizar_estado_usb(self):
-        """Revisa si el manejador encontró una USB y actualiza la UI"""
-        if self.usb_manejador:
-            drive = self.usb_manejador._get_first_usb_drive()
-            if drive:
-                self.usb_path_edit.setText(f"USB Detectada en: {drive}")
-                self.copy_btn.setEnabled(True)
-                self.copy_btn.setText(f"Copiar histórico a {drive}")
-            else:
-                self.usb_path_edit.setText("Esperando conexión USB...")
-                self.copy_btn.setEnabled(False)
-                self.copy_btn.setText("Conecte una USB para copiar")
+        """Verifica las unidades extraíbles disponibles en Windows."""
+        import string
+        import ctypes
+        
+        drive = None
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        for letter in string.ascii_uppercase:
+            if bitmask & 1:
+                # Comprobar si es extraíble (DRIVE_REMOVABLE = 2)
+                if ctypes.windll.kernel32.GetDriveTypeW(f"{letter}:\\") == 2:
+                    drive = f"{letter}:\\"
+                    break
+            bitmask >>= 1
+            
+        if drive:
+            self.usb_path_edit.setText(f"USB Detectada en: {drive}")
+            self.copy_btn.setEnabled(True)
+            self.copy_btn.setText(f"Copiar histórico a {drive}")
+        else:
+            self.usb_path_edit.setText("Esperando conexión USB...")
+            self.copy_btn.setEnabled(False)
+            self.copy_btn.setText("Conecte una USB para copiar")
 
     def update_historical_path(self):
         try:
             config = ConfigManager.cargar_config_general()
             storage_path = config.get("storage_path", "")
-            report_type = config.get("report_type", "Medidor")
+            
+            # Siempre leer el combobox actual
+            report_type = self.combo_formato.currentText()
             
             if storage_path and report_type:
                 config_provider = ConfigProvider(ConfigManager())
-                name_gen = FileNameGenerator(config_provider)
+                name_gen = FileNameGenerator(config_provider, self.error_handler)
                 historical_name = name_gen.generate_historic_name(report_type)
                 historical_full_path = os.path.join(storage_path, historical_name)
                 self.historical_path_edit.setText(historical_full_path)
@@ -127,25 +170,26 @@ class ReportsWindow(QWidget):
     def copy_historical_txt(self):
         historical_path = self.historical_path_edit.text()
         
-        if not self.usb_manejador:
-            QMessageBox.critical(self, "Error", "El servicio USB no está disponible.")
-            return
-            
-        usb_dest_path = self.usb_manejador._get_first_usb_drive()
-        
         if not historical_path or historical_path == "No configurado" or not os.path.exists(historical_path):
             QMessageBox.warning(self, "Error", "La ruta del reporte histórico no es válida o no existe.")
             return
             
-        if not usb_dest_path:
+        usb_text = self.usb_path_edit.text()
+        if "Esperando" in usb_text:
             QMessageBox.warning(self, "Error", "La USB fue desconectada.")
             return
+            
+        # Extraer la letra de la unidad del texto (ej: "USB Detectada en: E:\")
+        usb_dest_path = usb_text.split(": ")[1] if ": " in usb_text else None
         
+        if not usb_dest_path:
+            return
+            
         try:
             filename = os.path.basename(historical_path)
             dest_file = os.path.join(usb_dest_path, filename)
             shutil.copy2(historical_path, dest_file)
-            QMessageBox.information(self, "Éxito", f"Reporte histórico copiado a:\\n{dest_file}")
+            QMessageBox.information(self, "Éxito", f"Reporte histórico copiado a:\n{dest_file}")
             self.error_handler.log_evento("Respaldo histórico guardado en USB exitosamente")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error al copiar: {str(e)}")
@@ -153,6 +197,9 @@ class ReportsWindow(QWidget):
 
     def iniciar_proceso_reportes(self):
         try:
+            self.btn_generar.setEnabled(False)
+            self.btn_generar.setText("Generando...")
+            
             config = ConfigManager.cargar_config_general()
             hora_programada = config.get("hora_reporte", "23:00")
             
@@ -164,11 +211,15 @@ class ReportsWindow(QWidget):
 
             self.programar_tarea_diaria(hora_programada)
             self.generar_reporte_diario()
-            self.lbl_status.setText("✅ Reporte generado y programado")
+            
+            self.lbl_status.setText("✅ Reporte generado exitosamente.")
             
         except Exception as e:
             self.lbl_status.setText(f"❌ Error: {str(e)}")
             self.error_handler.log_error("305", f"Fallo al iniciar proceso de reportes: {str(e)}", es_error_sistema=True)
+        finally:
+            self.btn_generar.setText("Generar TXT Manual")
+            self.btn_generar.setEnabled(True)
 
     def programar_tarea_diaria(self, hora: str):
         schedule.clear()
@@ -180,30 +231,16 @@ class ReportsWindow(QWidget):
             tipo_reporte = config.get("report_type", "Medidor")
             usb_path = config.get("storage_path", "")
             
-            medidor = StateManager.get_state('medidor')
-            if not medidor:
-                raise ValueError("Medidor no configurado")
+            poller = thread_manager.modbus_poller
+            if not poller or not poller.medidor:
+                raise ValueError("Medidor no configurado o motor Modbus inactivo.")
             
-            # ========== LECTURA ROBUSTA ==========
-            datos_crudos = {}
-            max_intentos = 3
+            # ========== LECTURA DESDE RAM (No bloqueante) ==========
+            paquete = poller.obtener_ultimo_paquete()
+            datos_crudos = paquete.get("datos_crudos", {})
             
-            for intento in range(max_intentos):
-                try:
-                    if not medidor.client.connected:
-                        if not medidor.conectar(): continue
-                    
-                    datos_crudos = medidor.leer_registros()
-                    if datos_crudos and any(v is not None for v in datos_crudos.values()):
-                        break
-                    elif intento < max_intentos - 1:
-                        time.sleep(2)
-                except Exception as e:
-                    self.error_handler.log_error("007", f"Error en intento de lectura {intento + 1}: {str(e)}", es_error_sistema=True)
-                    if intento < max_intentos - 1: time.sleep(2)
-            
-            if not datos_crudos or all(v is None for v in datos_crudos.values()):
-                self.error_handler.log_error("007", "No se pudieron obtener datos del medidor para el reporte", es_error_sistema=True)
+            if not datos_crudos or not paquete.get("estado_conexion", False):
+                self.error_handler.log_error("007", "No hay datos de memoria RAM confiables para el reporte", es_error_sistema=True)
                 datos_crudos = {"flujo_instantaneo": 0.0, "flujo_acumulado": 0.0}
             else:
                 if "flujo_instantaneo" not in datos_crudos or datos_crudos["flujo_instantaneo"] is None:
@@ -211,21 +248,25 @@ class ReportsWindow(QWidget):
                 if "flujo_acumulado" not in datos_crudos or datos_crudos["flujo_acumulado"] is None:
                     datos_crudos["flujo_acumulado"] = 0.0
                     
-            perfil = medidor.perfil
+            perfil = poller.medidor.perfil
             
-            # APORTACIÓN: Procesar matemáticamente los datos crudos
+            # Procesamiento matemático de los datos
             datos_procesados = self.data_processor.process(datos_crudos, perfil)
 
-            ker_code = self.error_handler.get_ker_code()
+            # Obtención del código de error unificado
+            ker_code = self.error_handler.obtener_ker_para_reporte()
             
-            # Generar contenido usando los datos procesados
+            # Generar contenido usando los servicios
             config_provider = ConfigProvider(ConfigManager())
             bitmask_converter = BitmaskConverter()
-            formatter = RecordFormatter(config_provider, bitmask_converter)
+            formatter = RecordFormatter(config_provider, bitmask_converter, self.error_handler)
             
-            # ¡La magia ocurre aquí! Se usa datos_procesados
             contenido = formatter.format(tipo_reporte, datos_procesados, perfil, ker_code)
-            name_gen = FileNameGenerator(config_provider)
+            
+            # Mostrar vista previa
+            self.texto_vista_previa.setPlainText(contenido)
+            
+            name_gen = FileNameGenerator(config_provider, self.error_handler)
             
             # 1. Archivo historico (Guardado Localmente en storage_path)
             nombre_historico = name_gen.generate_historic_name(tipo_reporte)
@@ -233,28 +274,24 @@ class ReportsWindow(QWidget):
             with open(ruta_historico, 'a', encoding='utf-8') as f:
                 f.write(contenido + "\n")
             
-            # 2. Archivo diario de envío (Enviado a pendientes_usb para FTP/Email y USB Automático)
-            # ✅ REFACTORIZACIÓN: ESCRITURA ATÓMICA
+            # 2. Archivo diario de envío (Para FTP/Email)
             nombre_diario = name_gen.generate_daily_name(tipo_reporte)
             
-            # -> LÍNEAS RESTAURADAS: Definir la variable pendientes_dir y asegurar que el directorio exista
             pendientes_dir = str(path_manager.get_pendientes_usb_path())
             os.makedirs(pendientes_dir, exist_ok=True)
             
-            # Ahora sí se puede armar la ruta correctamente
             ruta_diario = os.path.join(pendientes_dir, nombre_diario)
             ruta_temp = ruta_diario + ".tmp"
             
-            # Escribimos en un archivo temporal (.tmp) que el Scheduler ignora
+            # Escritura atómica
             with open(ruta_temp, 'w', encoding='utf-8') as f:
                 f.write(contenido)
             
-            # os.replace es atómico y sobrescribe si el archivo ya existe (Evita WinError 183)
             os.replace(ruta_temp, ruta_diario)
                 
         except Exception as e:
             self.error_handler.log_error("304", f"ERROR CRÍTICO generando reporte diario: {str(e)}", es_error_sistema=True)
-            ker_code = self.error_handler.get_ker_code()
+            ker_code = self.error_handler.obtener_ker_para_reporte()
             error_content = f"ERR|{datetime.now().strftime('%Y%m%d|%H%M%S')}|{type(e).__name__}|{str(e)}|{ker_code}"
             
             try:
