@@ -236,6 +236,40 @@ class ConfigManager:
         cls._guardar_archivo(config_path, config)
         cls._cache.pop('sms', None)
 
+    @classmethod
+    def cargar_config_api(cls) -> Dict[str, Any]:
+        """Carga la configuración de la Web API y garantiza su copiado a AppData."""
+        if 'api' in cls._cache:
+            return cls._cache['api']
+        
+        # Saneamiento y copiado de plantilla garantizado
+        cls._ensure_writable_config("api_config.json", {
+            "enabled": False,
+            "api_url": "",
+            "api_key": "",
+            "intervalo_minutos": 15
+        })
+        
+        config_path = path_manager.get_config_path("api_config.json")
+        cfg = cls._cargar_archivo(config_path)
+        
+        if not cfg:
+            cfg = {"enabled": False, "api_url": "", "api_key": "", "intervalo_minutos": 15}
+            
+        cls._cache['api'] = cfg
+        return cfg
+
+    @classmethod
+    def guardar_config_api(cls, config: Dict[str, Any]) -> None:
+        """Guarda la configuración Web API y limpia la caché."""
+        campos_requeridos = ["enabled", "api_url", "api_key", "intervalo_minutos"]
+        for campo in campos_requeridos:
+            if campo not in config:
+                raise ValueError(f"Falta '{campo}' en la configuración de la API")
+                
+        config_path = path_manager.get_config_path("api_config.json")
+        cls._guardar_archivo(config_path, config)
+        cls._cache.pop('api', None)
 
     @classmethod
     def guardar_config_email(cls, config: Dict[str, Any]) -> None:

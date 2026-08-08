@@ -25,13 +25,15 @@ class FileScheduler:
         self,
         transfer_service: IFileTransfer,
         email_manager: Any,
+        api_manager: Any,
         config: Dict[str, Any],
         get_plantilla_fn: Callable[[str], Dict[str, Any]],
-        error_handler: ErrorHandler
+        error_handler: ErrorHandler,
     ):
         # Inyección de Dependencias (DIP)
         self.transfer_service = transfer_service
         self.email_manager = email_manager 
+        self.api_manager = api_manager # NUEVO
         self.config = config
         self.get_plantilla = get_plantilla_fn
         self.error_handler = error_handler
@@ -202,6 +204,7 @@ class FileScheduler:
             "ftp_ok": False,
             "ftp_msg": "No ejecutado",
             "email_ok": False,
+            "api_ok": False,
             "exito_completo": False
         }
         
@@ -212,50 +215,66 @@ class FileScheduler:
             ruta_remota = f"{ruta_base}/{nombre_remoto}" if ruta_base != "/" else f"/{nombre_remoto}"
 
             es_email_pendiente = filename.endswith('.email_pending')
+            es_api_pendiente = filename.endswith('.api_pending')
             
-            # PROTOCOLO 1: Interfaz Genérica (FTP) - Aislado
+            # PROTOCOLO 1: FTP
             try:
-                if not es_email_pendiente:
+                if not es_email_pendiente and not es_api_pendiente:
                     ftp_ok, ftp_msg = self.transfer_service.enviar_archivo(ruta_archivo, ruta_remota)
                     resultado["ftp_ok"] = ftp_ok
                     resultado["ftp_msg"] = ftp_msg
-                    
                     if not ftp_ok:
-                        self.error_handler.log_error("FTP-550", f"Fallo de transmisión en {filename}: {ftp_msg}", es_error_sistema=True)
+                        self.error_handler.log_error("FTP-550", f"Fallo en {filename}: {ftp_msg}", es_error_sistema=True)
                 else:
                     resultado["ftp_ok"] = True
-                    resultado["ftp_msg"] = "Transmisión principal previa exitosa (Omitido)"
+                    resultado["ftp_msg"] = "Previa exitosa"
             except Exception as e_ftp:
-                resultado["ftp_ok"] = False
-                resultado["ftp_msg"] = f"Excepción en capa FTP: {e_ftp}"
+                resultado["ftp_msg"] = f"Excepción FTP: {e_ftp}"
                 self.error_handler.log_error("FTP-550", resultado["ftp_msg"], es_error_sistema=True)
 
-            # PROTOCOLO 2: Delegación estricta de Email - Aislado
+            # PROTOCOLO 2: Email
             try:
-                if hasattr(self.email_manager, 'enviar_archivo'):
-                    # CORRECCIÓN: Se inyecta el segundo parámetro requerido (nombre_adjunto)
-                    email_ok = self.email_manager.enviar_archivo(ruta_archivo, filename)
+                if not es_api_pendiente:
+                    if hasattr(self.email_manager, 'enviar_archivo'):
+                        resultado["email_ok"] = self.email_manager.enviar_archivo(ruta_archivo, filename)
+                    if not resultado["email_ok"]:
+                        self.error_handler.log_error("EMAIL-FAIL", f"Fallo Email en {filename}", es_error_sistema=True)
                 else:
-                    email_ok = False
-                    
-                resultado["email_ok"] = email_ok
-                if not email_ok:
-                    self.error_handler.log_error("EMAIL-FAIL", f"Fallo Email en {filename}", es_error_sistema=True)
+                    resultado["email_ok"] = True
             except Exception as e_email:
-                resultado["email_ok"] = False
-                self.error_handler.log_error("EMAIL-FAIL", f"Excepción crítica en Email: {e_email}", es_error_sistema=True)
+                self.error_handler.log_error("EMAIL-FAIL", f"Excepción Email: {e_email}", es_error_sistema=True)
 
-            # EVALUACIÓN DE ESTADO Y ROTACIÓN DE ARCHIVOS
-            if resultado["ftp_ok"] and resultado["email_ok"]:
+            # PROTOCOLO 3: API Web (NUEVO)
+            try:
+                usar_api = self.config.get("usar_api", False)
+                if usar_api and hasattr(self.api_manager, 'enviar_archivo'):
+                    api_ok, api_msg = self.api_manager.enviar_archivo(ruta_archivo, filename)
+                    resultado["api_ok"] = api_ok
+                    if not api_ok:
+                        self.error_handler.log_error("API-FAIL", f"Fallo API: {api_msg}", es_error_sistema=True)
+                else:
+                    resultado["api_ok"] = True # Se marca true si la API no está habilitada en configuración global
+            except Exception as e_api:
+                self.error_handler.log_error("API-FAIL", f"Excepción API: {e_api}", es_error_sistema=True)
+
+            # EVALUACIÓN DE MÁQUINA DE ESTADOS Y ROTACIÓN DE BACKLOG
+            if resultado["ftp_ok"] and resultado["email_ok"] and resultado["api_ok"]:
                 resultado["exito_completo"] = True
                 if self._crear_respaldo_seguro(ruta_archivo):
                     try: os.remove(ruta_archivo)
                     except Exception: pass
-            elif resultado["ftp_ok"] and not resultado["email_ok"]:
-                if not es_email_pendiente:
-                    nueva_ruta = f"{ruta_archivo}.email_pending"
-                    try: os.rename(ruta_archivo, nueva_ruta)
-                    except Exception: pass
+            else:
+                # Rotación descendente de FSM
+                if resultado["ftp_ok"] and resultado["email_ok"] and not resultado["api_ok"]:
+                    if not es_api_pendiente:
+                        nueva_ruta = ruta_archivo.replace('.email_pending', '').replace('.txt', '') + '.api_pending'
+                        try: os.rename(ruta_archivo, nueva_ruta)
+                        except Exception: pass
+                elif resultado["ftp_ok"] and not resultado["email_ok"]:
+                    if not es_email_pendiente:
+                        nueva_ruta = ruta_archivo.replace('.txt', '') + '.email_pending'
+                        try: os.rename(ruta_archivo, nueva_ruta)
+                        except Exception: pass
             
             return resultado
 
@@ -291,7 +310,7 @@ class FileScheduler:
             if not os.path.exists(directorio):
                 return
             
-            archivos = [os.path.join(directorio, f) for f in os.listdir(directorio) if f.endswith('.txt') or f.endswith('.email_pending')]
+            archivos = [os.path.join(directorio, f) for f in os.listdir(directorio) if f.endswith(('.txt', '.email_pending', '.api_pending'))]
             if not archivos:
                 self._last_successful_run = datetime.now()
                 return
