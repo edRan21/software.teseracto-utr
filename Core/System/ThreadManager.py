@@ -18,6 +18,8 @@ class ThreadManager:
         self.modbus_poller: Optional[ModbusPoller] = None
         self.monitor_red: Optional[MonitorRed] = None 
         self.file_scheduler: Optional[Any] = None
+        # NUEVO: Referencia al hilo consumidor de la Web API
+        self.api_worker: Optional[Any] = None
 
     def registrar_poller(self, poller: ModbusPoller) -> None:
         """Registra la instancia del motor de hardware en el orquestador."""
@@ -27,6 +29,11 @@ class ThreadManager:
     def registrar_monitor_red(self, monitor: MonitorRed) -> None:
         self.monitor_red = monitor
         self.logger.info("MonitorRed registrado en el gestor de ciclo de vida.")
+    
+    def registrar_api_worker(self, worker: Any) -> None:
+        """NUEVO: Registra el motor de la telemetría periódica."""
+        self.api_worker = worker
+        self.logger.info("APITelemetryWorker registrado en el gestor de ciclo de vida.")        
     
     def registrar_scheduler(self, scheduler: Any) -> None:
         """Registra la instancia del planificador de red en el orquestador"""
@@ -53,6 +60,12 @@ class ThreadManager:
         if self.file_scheduler:
             self.logger.info("Orquestador iniciando el planificador de envíos...")
             self.file_scheduler.iniciar()
+            
+    def arrancar_api_worker(self):
+        """NUEVO: Inicia la transmisión periódica al servidor web."""
+        if self.api_worker:
+            self.logger.info("Orquestador iniciando telemetría Web API...")
+            self.api_worker.iniciar()
             
     def detener_hardware(self) -> None:
         """Ordena la detención controlada de las lecturas y liberación del puerto."""
@@ -86,6 +99,8 @@ class ThreadManager:
         if self.file_scheduler:
             self.file_scheduler.detener()
             self.logger.info("FileScheduler detenido de forma segura por el Orquestador.")
+        if self.api_worker:
+            self.api_worker.detener()
 
 # Instancia global (Singleton) para acceso centralizado
 thread_manager = ThreadManager()

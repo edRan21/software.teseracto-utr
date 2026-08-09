@@ -24,6 +24,8 @@ from Core.Network.FTPManager import FTPManager
 from Core.Network.EmailManager import EmailManager
 from Core.System.FileScheduler import FileScheduler
 from Core.Network.InternetManager import MonitorRed
+from Core.Network.APIManager import APIManager
+from Core.Network.APITelemetryWorker import APITelemetryWorker
 
 # Orquestador Central
 from Core.System.ThreadManager import thread_manager 
@@ -78,9 +80,18 @@ class TesseractApp(QApplication):
     def _preparar_scheduler(self):
         """Instancia el planificador de envíos y lo delega al Orquestador."""
         config_transferencias = ConfigManager.cargar_config_ftp()
+        config_api = ConfigManager.cargar_config_api()
         
         ftp_manager = FTPManager(config_transferencias, self.error_handler)
         email_manager = EmailManager(config_transferencias, self.error_handler)
+        
+        # 1. Instanciación del nuevo motor API
+        self.api_manager = APIManager(config_api, self.error_handler)
+        self.api_worker = APITelemetryWorker(self.api_manager, self.error_handler)
+        
+        # 2. Delegar ciclo de vida al Orquestador
+        thread_manager.registrar_api_worker(self.api_worker)
+        thread_manager.arrancar_api_worker()
         
         sched_config = {
             "hora_envio": config_transferencias.get("hora_envio", "23:59"),
@@ -89,13 +100,14 @@ class TesseractApp(QApplication):
             "enabled": config_transferencias.get("enabled", True),
             "usar_ftp": config_transferencias.get("usar_ftp", True),
             "usar_email": config_transferencias.get("usar_email", False),
-            "usar_api": config_transferencias.get("usar_api", False)
+            "usar_api": config_api.get("enabled", False) # Extracción de bandera API
         }
         
         # Construcción del objeto inyectando el ErrorHandler
         self.file_scheduler = FileScheduler(
             transfer_service=ftp_manager,
             email_manager=email_manager,
+            api_manager=self.api_manager, # Inyección de dependencia
             config=sched_config,
             get_plantilla_fn=lambda x: {}, # Función stub para resolver el contrato
             error_handler=self.error_handler
