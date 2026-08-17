@@ -1,6 +1,6 @@
 # Software.Teseracto-UTR
 
-<h1>Bienvenido al repositorio en donde se almacena el sistema de telemetría Tesseracto UTR (Unidad de transmisión remota)</h1>
+<h1>Bienvenido al repositorio en donde se almacena el sistema de telemetría Tesseracto UTR (Unidad de Transmisión Remota)</h1>
 
 <ul>
     <li>

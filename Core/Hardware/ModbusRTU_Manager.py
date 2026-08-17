@@ -427,7 +427,7 @@ class MedidorBadgerM2000(MedidorAguaBase):
                     return {}
                 
                 meter_status = response.registers[0]
-                self.error_handler.log_meter_error(meter_status, tipo_medidor="Badger M2000")
+                self.error_handler.procesar_estado_bruto_medidor(meter_status, tipo_medidor="Badger M2000")
                 
                 return {'meter_status': meter_status, 'timestamp': time.time()}
             except Exception as e:
@@ -448,7 +448,7 @@ class MedidorISOMAG(MedidorAguaBase):
                     return {}
                 
                 meter_status = response.registers[0]
-                self.error_handler.log_meter_error(meter_status, tipo_medidor="ISOMAG")
+                self.error_handler.procesar_estado_bruto_medidor(meter_status, tipo_medidor="ISOMAG")
                 
                 return {'meter_status': meter_status, 'timestamp': time.time()}
             except Exception as e:

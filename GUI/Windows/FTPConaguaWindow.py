@@ -13,7 +13,7 @@ from PyQt5.QtGui import QFont, QKeyEvent
 from Core.System.ConfigManager import ConfigManager
 from Core.System.PathManager import path_manager
 from Core.System.ThreadManager import thread_manager
-from Core.DataProcessing.Services import FileNameGenerator, UnitConverter
+from Core.DataProcessing.Services import FileNameGenerator
 from Core.Network.FTPManager import FTPManager
 from Core.DataProcessing.DataProcessor import DataProcessor
 
@@ -219,7 +219,7 @@ class FTPConaguaWindow(QWidget):
         self._initialized = False
         self._auth_success = False
         
-        self.data_processor = DataProcessor(UnitConverter(), self.error_handler)
+        self.data_processor = DataProcessor(self.error_handler)
         
         self._auth_success = self.verificar_autenticacion()
         

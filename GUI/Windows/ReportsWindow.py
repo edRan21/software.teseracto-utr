@@ -13,7 +13,7 @@ from Core.System.ConfigManager import ConfigManager
 from Core.System.StateManager import StateManager
 from Core.System.ErrorHandler import ErrorHandler
 from Core.System.PathManager import path_manager
-from Core.DataProcessing.Services import RecordFormatter, ConfigProvider, BitmaskConverter, FileNameGenerator, UnitConverter
+from Core.DataProcessing.Services import RecordFormatter, ConfigProvider, BitmaskConverter, FileNameGenerator
 from Core.DataProcessing.DataProcessor import DataProcessor
 from Core.System.ThreadManager import thread_manager
 
@@ -22,7 +22,7 @@ class ReportsWindow(QWidget):
         super().__init__()
         self.error_handler = error_handler
         
-        self.data_processor = DataProcessor(UnitConverter(), self.error_handler)
+        self.data_processor = DataProcessor(self.error_handler)
         
         self.setStyleSheet("""
             QWidget { background-color: #2b2b2b; color: #cccccc; font-family: Segoe UI; }

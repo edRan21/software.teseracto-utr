@@ -26,7 +26,7 @@ class DashboardWindow(QWidget):
         
         self.config_manager = ConfigManager()
         self.convertidor_unidades = UnitConverter()
-        self.procesador_datos = DataProcessor(self.convertidor_unidades, self.error_handler)
+        self.procesador_datos = DataProcessor(self.error_handler)
         
         self.unidad_medidor = "m³/h"
         self.unidad_visual = self.config_manager.cargar_config_general().get("unidad_visualizacion", "m³/h")
@@ -436,12 +436,14 @@ class DashboardWindow(QWidget):
             self.lbl_estadistica_errores.setText(", ".join(errores_text) if errores_text else "Ninguno")
             
             cod_error = datos_procesados.get('codigo_error', None)
-            if cod_error is not None:
+            
+            # Formateo directo asumiendo integridad del Core, con validación de tipo
+            if isinstance(cod_error, int):
                 self.lbl_codigo_hexadecimal.setText(f"{cod_error:04X}")
             else:
-               self.lbl_codigo_hexadecimal.setText("N/A")
+                self.lbl_codigo_hexadecimal.setText("N/A")
 
-            # Evaluación de Salud para el KER
+            # Evaluación de Salud para el KER (Estructura limpia)
             if not errores_text and cod_error in (0, None, 65535):
                 if hasattr(self.error_handler, 'reset_ker_normal'):
                     self.error_handler.reset_ker_normal()
