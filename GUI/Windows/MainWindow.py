@@ -19,6 +19,7 @@ from GUI.Windows.FTPConaguaWindow import FTPConaguaWindow
 from GUI.Windows.SettingsWindow import SettingsWindow
 from GUI.Windows.FTPEmailConfigWindow import FTPEmailConfigWindow
 from GUI.Windows.SMSConfigWindow import SMSConfigWindow
+from GUI.Windows.WebAPIConfigWindow import WebAPIConfigWindow
 
 class MainWindow(FramelessWindow):
     def __init__(self, user, error_handler, sensor_profiles, file_scheduler, usb_manejador=None):
@@ -111,12 +112,16 @@ class MainWindow(FramelessWindow):
         conagua_btn = QPushButton("FTP Unidad de Inspección")
         conagua_btn.clicked.connect(self.mostrar_ftp_conagua)
         
+        api_btn = QPushButton("Configuración Web API")
+        api_btn.clicked.connect(self.mostrar_configuracion_api)
+        
         cambiar_sesion_btn = QPushButton("🔄 Cambiar Sesión")
         cambiar_sesion_btn.setStyleSheet("background-color: #E67E22; color: white; font-weight: bold;")
         cambiar_sesion_btn.clicked.connect(self.cambiar_sesion)
         
         menu_layout.addWidget(system_btn)
         menu_layout.addWidget(ftp_btn)
+        menu_layout.addWidget(api_btn)
         menu_layout.addWidget(sms_btn)
         menu_layout.addWidget(conagua_btn)
         menu_layout.addWidget(cambiar_sesion_btn)
@@ -294,6 +299,14 @@ class MainWindow(FramelessWindow):
                     self.mostrar_alerta_estado("⚠️ Error en comunicación del medidor")
         except Exception as e:
             self.error_handler.log_error("010", f"Error crítico consultando RAM: {str(e)}")
+    
+    def mostrar_configuracion_api(self):
+        if self.rol_usuario != "admin":
+            QMessageBox.warning(self, "Acceso Denegado", "Solo el Técnico puede configurar la Web API.")
+            return
+        # Inyección pura del Orquestador
+        self.api_window = WebAPIConfigWindow(thread_manager.api_worker, self.error_handler)
+        self.api_window.show()
 
     def closeEvent(self, event):
         """Limpieza al cerrar la ventana principal."""
