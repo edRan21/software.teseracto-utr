@@ -59,8 +59,8 @@ class WorkerEnvioManual(QThread):
             pendientes_antes = len([f for f in os.listdir(ruta_pendientes) if f.endswith('.txt')]) if os.path.exists(ruta_pendientes) else 0
             
             # Forzar ejecución invocando el método matemático interno del Orquestador de red
-            if hasattr(self.file_scheduler, '_procesar_archivos'):
-                self.file_scheduler._procesar_archivos()
+            if hasattr(self.file_scheduler, 'forzar_envio_inmediato'):
+                self.file_scheduler.forzar_envio_inmediato()
             
             pendientes_despues = len([f for f in os.listdir(ruta_pendientes) if f.endswith('.txt')]) if os.path.exists(ruta_pendientes) else 0
             exitosos = max(0, pendientes_antes - pendientes_despues)
